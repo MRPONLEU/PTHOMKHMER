@@ -45,7 +45,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [docs, setDocs] = useState<DocumentItem[]>([]);
 // Initialize activeTab 'manage' and manageTab 'dashboard' if that's the intended default
-  const [activeTab, setActiveTab] = useState<'view' | 'manage'>('manage');
+  const [activeTab, setActiveTab] = useState<'view' | 'manage'>('view');
   const [manageTab, setManageTab] = useState<'dashboard' | 'docs' | 'types' | 'admins'>('dashboard');
   const [searchTerm, setSearchTerm] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -750,12 +750,14 @@ export default function App() {
         <div className="p-4 flex flex-col gap-2 flex-1 overflow-y-auto">
           <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-2 mt-4">ម៉ឺនុយ</div>
           
-          <button
-            onClick={() => { setActiveTab('manage'); setManageTab('dashboard'); setIsSidebarOpen(false); }}
-            className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'manage' && manageTab === 'dashboard' ? 'bg-blue-600/10 text-blue-500' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
-          >
-            <LayoutGrid size={18}/> គ្រប់គ្រងទូទៅ
-          </button>
+          {isAdminUser && (
+            <button
+              onClick={() => { setActiveTab('manage'); setManageTab('dashboard'); setIsSidebarOpen(false); }}
+              className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'manage' && manageTab === 'dashboard' ? 'bg-blue-600/10 text-blue-500' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+            >
+              <LayoutGrid size={18}/> គ្រប់គ្រងទូទៅ
+            </button>
+          )}
 
           <button
             onClick={() => { setActiveTab('view'); setTypeFilter(null); setIsSidebarOpen(false); setSearchTerm(''); }}
@@ -1086,7 +1088,7 @@ export default function App() {
         <main className="flex-1 overflow-y-auto w-full px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-8">
         
         {/* Dynamic Headings based on Tab */}
-        {(activeTab === 'manage' || (activeTab === 'view' && typeFilter)) && (
+        {((activeTab === 'manage' && isAdminUser) || (activeTab === 'view' && typeFilter)) && (
           <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-6 max-w-full">
             <div className="max-w-2xl">
               {activeTab === 'manage' && (
@@ -1123,7 +1125,7 @@ export default function App() {
         )}
 
         <div className="mt-6">
-          {activeTab === 'manage' && manageTab === 'types' ? (
+          {activeTab === 'manage' && isAdminUser && manageTab === 'types' ? (
             <div className="flex flex-col gap-6 max-w-3xl pb-12">
               {/* Add New Category Card */}
               <div className="bg-[#161B22] border border-white/5 rounded-2xl p-6">
@@ -1325,7 +1327,7 @@ export default function App() {
               </div>
             ))}
           </div>
-        ) : activeTab === 'manage' && manageTab === 'docs' ? (
+        ) : activeTab === 'manage' && isAdminUser && manageTab === 'docs' ? (
           <motion.div 
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -1406,7 +1408,7 @@ export default function App() {
               </table>
             </div>
           </motion.div>
-        ) : activeTab === 'manage' && manageTab === 'dashboard' ? (
+        ) : activeTab === 'manage' && isAdminUser && manageTab === 'dashboard' ? (
           <div className="flex flex-col gap-8">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
               <div className="bg-[#161B22] border border-white/5 rounded-2xl p-6 flex items-center justify-between shadow-lg">
@@ -1451,7 +1453,7 @@ export default function App() {
               </div>
             </div>
           </div>
-        ) : activeTab === 'manage' && manageTab === 'admins' ? (
+        ) : activeTab === 'manage' && isAdminUser && manageTab === 'admins' ? (
           <div className="flex flex-col gap-6 max-w-3xl">
             <div className="bg-[#161B22] border border-white/5 rounded-2xl p-6 shadow-lg">
               <div className="flex flex-col gap-4">
