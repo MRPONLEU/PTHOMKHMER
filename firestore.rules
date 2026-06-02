@@ -17,11 +17,11 @@ service cloud.firestore {
     }
 
     function getEmail() {
-      return request.auth.token.email.lower();
+      return request.auth != null ? request.auth.token.email.lower() : "";
     }
 
     function isSuperAdmin() {
-      return isEmailVerified() && (
+      return isSignedIn() && (
         getEmail() == "broponleu998@gmail.com" ||
         getEmail() == "mrponleu20000@gmail.com"
       );
@@ -29,7 +29,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSuperAdmin() || (
-        isEmailVerified() &&
+        isSignedIn() &&
         (
           (exists(/databases/$(database)/documents/admins/$(getEmail())) && get(/databases/$(database)/documents/admins/$(getEmail())).data.role in ['admin', 'master', 'editor']) ||
           (exists(/databases/$(database)/documents/users/$(getEmail())) && get(/databases/$(database)/documents/users/$(getEmail())).data.role in ['admin', 'master', 'editor'])
@@ -39,7 +39,7 @@ service cloud.firestore {
     
     function isUserPro() {
       return isSuperAdmin() || isAdmin() || (
-        isEmailVerified() &&
+        isSignedIn() &&
         exists(/databases/$(database)/documents/users/$(getEmail())) &&
         get(/databases/$(database)/documents/users/$(getEmail())).data.role == 'user pro'
       );
@@ -60,9 +60,15 @@ service cloud.firestore {
     
     // --- Users Collection ---
     match /users/{userEmail} {
-      allow read: if isSignedIn();
+      allow read: if true;
       // Users can create/update their own basic record on login, but can't elevate their role
-      allow create, update: if isSignedIn() && getEmail() == userEmail || isAdmin();
+      allow create, update: if 
+        (isSignedIn() && getEmail() == userEmail && (
+          // If the role is not being elevated or changed
+          (resource == null && !("role" in request.resource.data)) || 
+          (resource != null && request.resource.data.get('role', 'user') == resource.data.get('role', 'user'))
+        )) 
+        || isAdmin();
       allow delete: if isAdmin();
     }
 
@@ -82,9 +88,7 @@ service cloud.firestore {
 
     // --- Documents Collection ---
     match /docs/{docId} {
-      // General read safety: anyone can read if not hidden. Admins can read anything.
-      allow get: if resource == null || resource.data.isHidden == false || isAdmin();
-      allow list: if resource.data.isHidden == false || isAdmin();
+      allow read: if true;
 
       allow create: if isAdmin() && isValidDoc(request.resource.data);
       allow delete: if isAdmin();
