@@ -17,6 +17,6 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Odor Mean Chey", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "DM Serif Display", "Odor Mean Chey", "Inter", ui-sans-serif, system-ui, sans-serif;
 }
 

@@ -30,7 +30,18 @@ service cloud.firestore {
     function isAdmin() {
       return isSuperAdmin() || (
         isEmailVerified() &&
-        exists(/databases/$(database)/documents/admins/$(getEmail()))
+        (
+          (exists(/databases/$(database)/documents/admins/$(getEmail())) && get(/databases/$(database)/documents/admins/$(getEmail())).data.role in ['admin', 'master', 'editor']) ||
+          (exists(/databases/$(database)/documents/users/$(getEmail())) && get(/databases/$(database)/documents/users/$(getEmail())).data.role in ['admin', 'master', 'editor'])
+        )
+      );
+    }
+    
+    function isUserPro() {
+      return isSuperAdmin() || isAdmin() || (
+        isEmailVerified() &&
+        exists(/databases/$(database)/documents/users/$(getEmail())) &&
+        get(/databases/$(database)/documents/users/$(getEmail())).data.role == 'user pro'
       );
     }
 
@@ -40,11 +51,19 @@ service cloud.firestore {
 
     // 3. Collection Rules
 
-    // --- Admins Collection ---
+    // --- Admins Collection (Legacy, keep for backwards compat) ---
     match /admins/{adminEmail} {
       // Admins are identified by their lowercase email as the document ID
       allow read: if isSignedIn();
       allow create, update, delete: if isAdmin();
+    }
+    
+    // --- Users Collection ---
+    match /users/{userEmail} {
+      allow read: if isSignedIn();
+      // Users can create/update their own basic record on login, but can't elevate their role
+      allow create, update: if isSignedIn() && getEmail() == userEmail || isAdmin();
+      allow delete: if isAdmin();
     }
 
     // --- Categories Collection ---
@@ -92,6 +111,7 @@ service cloud.firestore {
           && (data.type == null || (data.type is string && data.type.size() <= 128))
           && (data.subType == null || (data.subType is string && data.subType.size() <= 128))
           && (data.isHidden == null || data.isHidden is bool)
+          && (data.isFree == null || data.isFree is bool)
           && (data.tags == null || data.tags is list);
       }
     }

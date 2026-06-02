@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useDeferredValue } from 'react';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Download, File as FileIcon, Search, Eye, EyeOff, HardDriveDownload, Calendar, Plus, Edit2, Trash2, X, LayoutGrid, Settings, Menu, UploadCloud, ChevronDown, Folder, GripVertical, ArrowUp, ArrowDown, LogOut, LogIn, Filter, Check, Loader2, Book, ArrowLeft, Pause } from 'lucide-react';
+import { Download, File as FileIcon, Search, Eye, EyeOff, HardDriveDownload, Calendar, Plus, Edit2, Trash2, X, LayoutGrid, Settings, Menu, UploadCloud, ChevronDown, Folder, GripVertical, ArrowUp, ArrowDown, LogOut, LogIn, Filter, Check, Loader2, Book, ArrowLeft, Pause, Lock, Phone, MessageCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { DocumentItem } from './types';
 import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
@@ -56,6 +56,7 @@ export default function App() {
   const [viewingDoc, setViewingDoc] = useState<DocumentItem | null>(null);
   const [downloadingStates, setDownloadingStates] = useState<Record<string, number>>({});
   const [isDocLoading, setIsDocLoading] = useState(true);
+  const [lockedDocPrompt, setLockedDocPrompt] = useState<DocumentItem | null>(null);
 
   const toggleCategory = (categoryId: string) => {
     setExpandedCategories(prev => 
@@ -69,8 +70,9 @@ export default function App() {
 
   // Category State
   const [categories, setCategories] = useState<any[]>([]);
-  const [admins, setAdmins] = useState<any[]>([]);
+  const [usersList, setUsersList] = useState<any[]>([]);
   const [isAdminState, setIsAdminState] = useState(false);
+  const [canViewLocked, setCanViewLocked] = useState(false);
 
   // Loading & Error State
   const [isLoadingDocs, setIsLoadingDocs] = useState(true);
@@ -80,7 +82,8 @@ export default function App() {
 
   // 1. Dynamics Auth state synchronization
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+    let _active = true;
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
         const u = {
           email: user.email?.toLowerCase() || '',
@@ -88,11 +91,23 @@ export default function App() {
           photoURL: user.photoURL || undefined
         };
         setCurrentUser(u);
+        
+        if (_active) {
+          try {
+            await setDoc(doc(db, 'users', u.email), {
+              email: u.email,
+              displayName: u.displayName,
+              photoURL: u.photoURL,
+              lastLogin: new Date().toISOString()
+            }, { merge: true });
+          } catch(e) {}
+        }
       } else {
         setCurrentUser(null);
       }
     });
     return () => {
+      _active = false;
       unsubscribeAuth();
     };
   }, []);
@@ -119,37 +134,44 @@ export default function App() {
     };
   }, []);
 
-  // 3. Admins subscription (Only when signed in)
+  // 3. Users subscription (Only when signed in)
   useEffect(() => {
-    if (!currentUser) {
-      setAdmins([
-        { email: 'broponleu998@gmail.com', addedAt: '2026-06-01' },
-        { email: 'mrponleu20000@gmail.com', addedAt: '2026-06-01' }
+    if (!currentUser) return;
+    
+    const emailLower = currentUser.email.toLowerCase();
+    const isMaster = emailLower === 'broponleu998@gmail.com' || emailLower === 'mrponleu20000@gmail.com';
+    
+    if (isMaster) {
+      setUsersList([
+        { email: 'broponleu998@gmail.com', role: 'master', lastLogin: '' },
+        { email: 'mrponleu20000@gmail.com', role: 'master', lastLogin: '' }
       ]);
-      return;
     }
-    const unsubscribeAdmins = onSnapshot(collection(db, 'admins'), (snapshot) => {
+    
+    const unsubscribeUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
       const items: any[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
         items.push({
-          email: doc.id,
-          addedAt: data.addedAt || ''
+          email: docSnap.id,
+          role: data.role || 'user',
+          lastLogin: data.lastLogin || data.addedAt || '',
+          displayName: data.displayName || '',
         });
       });
-      if (items.length === 0) {
-        setAdmins([
-          { email: 'broponleu998@gmail.com', addedAt: '2026-06-01' },
-          { email: 'mrponleu20000@gmail.com', addedAt: '2026-06-01' }
+      if (items.length === 0 && isMaster) {
+        setUsersList([
+           { email: 'broponleu998@gmail.com', role: 'master', lastLogin: '' },
+           { email: 'mrponleu20000@gmail.com', role: 'master', lastLogin: '' }
         ]);
       } else {
-        setAdmins(items);
+        setUsersList(items);
       }
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'admins');
+      handleFirestoreError(error, OperationType.LIST, 'users');
     });
     return () => {
-      unsubscribeAdmins();
+      unsubscribeUsers();
     };
   }, [currentUser]);
 
@@ -177,6 +199,7 @@ export default function App() {
           type: data.type || '',
           subType: data.subType || '',
           isHidden: !!data.isHidden,
+          isFree: data.isFree !== false, // Default to true if missing
           tags: data.tags || []
         });
       });
@@ -197,14 +220,18 @@ export default function App() {
       const isMaster = emailLower === 'broponleu998@gmail.com' || emailLower === 'mrponleu20000@gmail.com';
       if (isMaster) {
         setIsAdminState(true);
+        setCanViewLocked(true);
       } else {
-        const isAdmin = admins.some(a => a.email?.toLowerCase() === emailLower);
-        setIsAdminState(isAdmin);
+        const userRec = usersList.find(a => a.email?.toLowerCase() === emailLower);
+        const role = userRec?.role || 'user';
+        setIsAdminState(role === 'admin' || role === 'master' || role === 'editor');
+        setCanViewLocked(role === 'admin' || role === 'master' || role === 'editor' || role === 'user pro');
       }
     } else {
       setIsAdminState(false);
+      setCanViewLocked(false);
     }
-  }, [currentUser, admins]);
+  }, [currentUser, usersList]);
 
   const signInWithGoogle = async () => {
     try {
@@ -251,6 +278,10 @@ export default function App() {
   };
 
   const handleView = (doc: DocumentItem) => {
+    if (doc.isFree === false && !canViewLocked) {
+      setLockedDocPrompt(doc);
+      return;
+    }
     setIsDocLoading(true);
     setViewingDoc(doc);
   };
@@ -491,6 +522,7 @@ export default function App() {
       downloadUrl: '#', 
       uploadDate: new Date().toISOString().split('T')[0],
       downloads: 0,
+      isFree: true,
       tags: []
     });
     setIsModalOpen(true);
@@ -567,95 +599,59 @@ export default function App() {
   };
 
   const handleDownload = async (docObj: DocumentItem) => {
+    if (docObj.isFree === false && !canViewLocked) {
+      setLockedDocPrompt(docObj);
+      return;
+    }
     if (downloadingStates[docObj.id] !== undefined) return;
 
-    let downloadUrl = docObj.downloadUrl;
-    const isDrive = downloadUrl && downloadUrl.includes('drive.google.com');
-    if (isDrive) {
-      const regex = /\/d\/([a-zA-Z0-9_-]+)/;
-      const match = downloadUrl.match(regex);
-      if (match && match[1]) {
-        downloadUrl = `https://drive.google.com/uc?export=download&id=${match[1]}`;
-      }
-    }
-
     setDownloadingStates(prev => ({ ...prev, [docObj.id]: 0 }));
-    let success = false;
+    
+    let progress = 0;
+    const interval = setInterval(() => {
+      progress += Math.floor(Math.random() * 15) + 5;
+      if (progress > 90) progress = 90;
+      setDownloadingStates(prev => ({ ...prev, [docObj.id]: progress }));
+    }, 200);
 
-    try {
-      // Try using the File System Access API to force a native save dialog
-      if ('showSaveFilePicker' in window && !isDrive) {
-        const fileHandle = await (window as any).showSaveFilePicker({
-          suggestedName: docObj.title || 'document',
-        });
+    setTimeout(async () => {
+      clearInterval(interval);
+      setDownloadingStates(prev => ({ ...prev, [docObj.id]: 100 }));
+      
+      if (docObj.downloadUrl) {
+        let downloadUrl = docObj.downloadUrl;
+        if (downloadUrl.includes('drive.google.com/')) {
+          const regex = /\/d\/([a-zA-Z0-9_-]+)/;
+          const match = downloadUrl.match(regex);
+          if (match && match[1]) {
+            downloadUrl = `https://drive.google.com/uc?export=download&id=${match[1]}`;
+          }
+        }
         
-        let progress = 10;
-        const interval = setInterval(() => {
-          progress += Math.floor(Math.random() * 10) + 2;
-          if (progress > 80) progress = 80;
-          setDownloadingStates(prev => ({ ...prev, [docObj.id]: progress }));
-        }, 300);
-
-        const response = await fetch(downloadUrl);
-        if (!response.ok) throw new Error('Network error');
-        const blob = await response.blob();
-        
-        const writable = await fileHandle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        
-        clearInterval(interval);
-        success = true;
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.target = '_blank';
+        link.download = docObj.title || 'download';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
       }
-    } catch (e: any) {
-      if (e.name === 'AbortError') {
-        // User explicitly cancelled the Save dialog
+      
+      try {
+        await updateDoc(doc(db, 'docs', docObj.id), {
+          downloads: (docObj.downloads || 0) + 1
+        });
+      } catch (e) {
+        console.error("Error incrementing downloads:", e);
+      }
+
+      setTimeout(() => {
         setDownloadingStates(prev => {
           const next = { ...prev };
           delete next[docObj.id];
           return next;
         });
-        return;
-      }
-      console.warn("Native file picker failed or CORS blocked:", e);
-    }
-
-    if (!success) {
-      // Fallback for browsers without File System Access API or Google Drive links (which block CORS)
-      let progress = 10;
-      const interval = setInterval(() => {
-        progress += Math.floor(Math.random() * 15) + 5;
-        if (progress > 90) progress = 90;
-        setDownloadingStates(prev => ({ ...prev, [docObj.id]: progress }));
-      }, 200);
-
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.target = '_blank';
-      link.download = docObj.title || 'document';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      
-      setTimeout(() => clearInterval(interval), 1500);
-    }
-
-    setDownloadingStates(prev => ({ ...prev, [docObj.id]: 100 }));
-
-    try {
-      await updateDoc(doc(db, 'docs', docObj.id), {
-        downloads: (docObj.downloads || 0) + 1
-      });
-    } catch (e) {
-      console.error("Error incrementing downloads:", e);
-    }
-
-    setTimeout(() => {
-      setDownloadingStates(prev => {
-        const next = { ...prev };
-        delete next[docObj.id];
-        return next;
-      });
+      }, 1000);
     }, 1500);
   };
 
@@ -714,6 +710,7 @@ export default function App() {
         type: finalData.type || '',
         subType: finalData.subType || '',
         isHidden: !!finalData.isHidden,
+        isFree: finalData.isFree !== false,
         tags: finalData.tags || []
       };
 
@@ -875,7 +872,7 @@ export default function App() {
                         onClick={() => { setActiveTab('manage'); setManageTab('admins'); setIsSidebarOpen(false); }}
                         className={`text-left text-sm py-2 px-3 rounded-md transition-colors ${activeTab === 'manage' && manageTab === 'admins' ? 'bg-blue-600/20 text-blue-400 font-semibold' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}
                       >
-                        គ្រប់គ្រងសិទ្ធិ (Admins)
+                        អ្នកប្រើប្រាស់ និងសិទ្ធិ
                       </button>
                     </div>
                   </motion.div>
@@ -1343,6 +1340,13 @@ export default function App() {
                           loading="lazy"
                           className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-in-out"
                         />
+                        <div className="absolute top-3 right-3 z-30">
+                          {doc.isFree === false && (
+                            <div className="p-1.5 bg-black/60 text-amber-400 rounded-lg shadow-sm backdrop-blur-md border border-white/10" title="បង់ប្រាក់ (Paid)">
+                              <Lock size={14} className="stroke-[2.5]" />
+                            </div>
+                          )}
+                        </div>
                         <div className="absolute inset-0 bg-gradient-to-t from-[#161B22] via-transparent to-transparent opacity-60 z-10 pointer-events-none" />
                       </div>
 
@@ -1425,7 +1429,12 @@ export default function App() {
                             <img src={getDriveImageUrl(doc.coverUrl)} alt="" loading="lazy" className="w-full h-full object-cover" />
                           </div>
                           <div>
-                            <div className="text-white font-bold text-sm leading-[1.6] py-1 mb-1 line-clamp-2">{doc.title}</div>
+                            <div className="flex items-center gap-2 mb-1">
+                              <div className="text-white font-bold text-sm leading-[1.6] py-1 line-clamp-2">{doc.title}</div>
+                              {doc.isFree === false && (
+                                <span className="px-1.5 py-0.5 text-[10px] font-bold bg-amber-500/10 text-amber-500 rounded flex items-center justify-center shrink-0" title="បង់ប្រាក់"><Lock size={12} className="stroke-[2.5]" /></span>
+                              )}
+                            </div>
                             {doc.tags && doc.tags.length > 0 && (
                               <div className="flex flex-wrap gap-1.5">
                                 {doc.tags.map((tag, idx) => (
@@ -1536,7 +1545,7 @@ export default function App() {
                     value={newAdminEmail}
                     onChange={(e) => setNewAdminEmail(e.target.value)}
                     id="newAdminEmail"
-                    placeholder="ឧ. user@gmail.com" 
+                    placeholder="បញ្ចូល Email អ្នកប្រើប្រាស់..." 
                     className="flex-1 bg-[#0A0C10] border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
                     onKeyDown={async (e) => {
                       if (e.key === 'Enter') {
@@ -1544,18 +1553,18 @@ export default function App() {
                         if (email && email.includes('@')) {
                           try {
                             if (editingAdminEmail && editingAdminEmail !== email) {
-                              await deleteDoc(doc(db, 'admins', editingAdminEmail));
+                              await deleteDoc(doc(db, 'users', editingAdminEmail));
                             }
-                            await setDoc(doc(db, 'admins', email), {
+                            await setDoc(doc(db, 'users', email), {
                               email,
                               role: newAdminRole,
                               addedAt: new Date().toISOString()
-                            });
+                            }, { merge: true });
                             
                             setNewAdminEmail('');
                             setEditingAdminEmail(null);
-                            setNewAdminRole('admin');
-                            showNotification(editingAdminEmail ? 'បានកែប្រែដោយជោគជ័យ' : 'បានបន្ថែម Admin ថ្មីដោយជោគជ័យ');
+                            setNewAdminRole('user');
+                            showNotification(editingAdminEmail ? 'បានកែប្រែសិទ្ធិដោយជោគជ័យ' : 'បានបញ្ចួលអ្នកប្រើប្រាស់ជោគជ័យ');
                           } catch (err) {
                              showNotification('គ្មានសិទ្ធិ ឬមានបញ្ហា', 'error');
                           }
@@ -1568,8 +1577,10 @@ export default function App() {
                     onChange={(e) => setNewAdminRole(e.target.value)}
                     className="bg-[#0A0C10] border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors"
                   >
-                    <option value="admin">Admin ពេញសិទ្ធិ</option>
+                    <option value="user">User ធម្មតា</option>
+                    <option value="user pro">User Pro (មើលបានឯកសារជាប់សោរ)</option>
                     <option value="editor">Editor (ត្រឹមបញ្ចូល/កែប្រែ)</option>
+                    <option value="admin">Admin ពេញសិទ្ធិ</option>
                   </select>
                 </div>
                 
@@ -1579,7 +1590,7 @@ export default function App() {
                       onClick={() => {
                         setEditingAdminEmail(null);
                         setNewAdminEmail('');
-                        setNewAdminRole('admin');
+                        setNewAdminRole('user');
                       }}
                       className="px-5 py-3 rounded-xl flex items-center justify-center gap-2 text-sm text-slate-300 bg-white/5 hover:bg-white/10 font-bold transition-colors"
                     >
@@ -1592,17 +1603,17 @@ export default function App() {
                       if (email && email.includes('@')) {
                         try {
                           if (editingAdminEmail && editingAdminEmail !== email) {
-                            await deleteDoc(doc(db, 'admins', editingAdminEmail));
+                            await deleteDoc(doc(db, 'users', editingAdminEmail));
                           }
-                          await setDoc(doc(db, 'admins', email), {
+                          await setDoc(doc(db, 'users', email), {
                             email,
                             role: newAdminRole,
                             addedAt: new Date().toISOString()
-                          });
+                          }, { merge: true });
                           setNewAdminEmail('');
                           setEditingAdminEmail(null);
-                          setNewAdminRole('admin');
-                          showNotification(editingAdminEmail ? 'បានកែប្រែដោយជោគជ័យ' : 'បានបន្ថែម Admin ថ្មីដោយជោគជ័យ');
+                          setNewAdminRole('user');
+                          showNotification(editingAdminEmail ? 'បានកែប្រែសិទ្ធិដោយជោគជ័យ' : 'បានបញ្ចួលអ្នកប្រើប្រាស់ជោគជ័យ');
                         } catch (err) {
                           showNotification('គ្មានសិទ្ធិ ឬមានបញ្ហា', 'error');
                         }
@@ -1610,45 +1621,40 @@ export default function App() {
                     }}
                     className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 text-sm transition-colors"
                   >
-                    {editingAdminEmail ? <><Check size={18} /> រក្សាទុកកែប្រែ</> : <><Plus size={18} /> បន្ថែមគណនី Admin</>}
+                    {editingAdminEmail ? <><Check size={18} /> រក្សាទុកកែប្រែ</> : <><Plus size={18} /> កំណត់មុខងារសិទ្ធិ</>}
                   </button>
                 </div>
               </div>
             </div>
 
             <div className="flex flex-col gap-3">
-              <h3 className="text-slate-400 font-bold uppercase tracking-wider text-sm pl-2">បញ្ជី Admins ពិតប្រាកដ:</h3>
-              <div className="flex items-center justify-between p-4 bg-[#161B22] border border-emerald-500/20 shadow-lg rounded-xl">
-                 <div className="text-white font-semibold flex items-center gap-3">
-                    <span className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-black">B</span>
-                    broponleu998@gmail.com
-                 </div>
-                 <div className="text-xs bg-emerald-500/10 text-emerald-500 px-3 py-1 rounded-full border border-emerald-500/20 font-bold">MASTER</div>
-              </div>
-              <div className="flex items-center justify-between p-4 bg-[#161B22] border border-emerald-500/20 shadow-lg rounded-xl">
-                 <div className="text-white font-semibold flex items-center gap-3">
-                    <span className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-black">M</span>
-                    mrponleu20000@gmail.com
-                 </div>
-                 <div className="text-xs bg-emerald-500/10 text-emerald-500 px-3 py-1 rounded-full border border-emerald-500/20 font-bold">MASTER</div>
-              </div>
-              
-              <h3 className="text-slate-400 font-bold uppercase tracking-wider text-sm pl-2 mt-4">Admins បន្ថែម:</h3>
-              {admins.length === 0 && <div className="text-slate-600 pl-2 text-sm">មិនទាន់មាន Admin បន្ថែមទេ...</div>}
-              {admins.map((ad) => (
+              <h3 className="text-slate-400 font-bold uppercase tracking-wider text-sm pl-2 mt-4">បញ្ជីអ្នកប្រើប្រាស់ (USERS)</h3>
+              {usersList.length === 0 && <div className="text-slate-600 pl-2 text-sm">មិនទាន់មានអ្នកប្រើប្រាស់ទេ...</div>}
+              {usersList.map((ad) => (
                 <div key={ad.email} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-[#161B22] border border-white/5 rounded-xl group hover:border-white/10 transition-colors gap-3">
                   <div className="flex flex-col">
-                    <div className="text-slate-200 font-bold">{ad.email}</div>
-                    <div className="text-xs text-slate-400 font-medium tracking-wide mt-1 uppercase">
-                      {ad.role === 'editor' ? '🔴 EDITOR' : '🔵 ADMIN'}
+                    <div className="text-slate-200 font-bold flex items-center gap-2">
+                       {ad.email}
+                       {ad.role === 'master' && <span className="text-[10px] bg-teal-500/10 text-teal-500 px-2 py-0.5 rounded font-bold uppercase">Master</span>}
+                       {ad.role === 'admin' && <span className="text-[10px] bg-blue-500/10 text-blue-400 px-2 py-0.5 rounded font-bold uppercase">Admin</span>}
+                       {ad.role === 'editor' && <span className="text-[10px] bg-amber-500/10 text-amber-500 px-2 py-0.5 rounded font-bold uppercase">Editor</span>}
+                       {ad.role === 'user pro' && <span className="text-[10px] bg-purple-500/10 text-purple-400 px-2 py-0.5 rounded font-bold uppercase">Pro</span>}
+                    </div>
+                    <div className="text-slate-500 text-xs mt-1 font-medium flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-blue-500 inline-block"></span>
+                      {ad.role?.toUpperCase() || 'USER'}
+                      {(ad.lastLogin || ad.addedAt) && <span>• ក្រោយគេបង្អស់៖ {new Date(ad.lastLogin || ad.addedAt).toLocaleDateString()}</span>}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button 
-                      onClick={() => {
-                        setEditingAdminEmail(ad.email);
-                        setNewAdminEmail(ad.email);
-                        setNewAdminRole(ad.role || 'admin');
+                  
+                  {ad.email !== 'broponleu998@gmail.com' && ad.email !== 'mrponleu20000@gmail.com' && (
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => {
+                          setEditingAdminEmail(ad.email);
+                          setNewAdminEmail(ad.email);
+                          setNewAdminRole(ad.role || 'user');
+
                         window.scrollTo({ top: 0, behavior: 'smooth' });
                       }}
                       className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-500/10 rounded-lg transition-colors"
@@ -1657,10 +1663,10 @@ export default function App() {
                     </button>
                     <button 
                       onClick={async () => {
-                        if(window.confirm('តើអ្នកពិតជាចង់ដកសិទ្ធិ Admin នេះមែនទេ?')) {
+                        if(window.confirm('តើអ្នកពិតជាចង់លុបគណនីនេះមែនទេ?')) {
                           try {
-                            await deleteDoc(doc(db, 'admins', ad.email));
-                            showNotification('បានដកសិទ្ធិជោគជ័យ');
+                            await deleteDoc(doc(db, 'users', ad.email));
+                            showNotification('បានលុបគណនីជោគជ័យ');
                           } catch (e) {
                             showNotification('មានបញ្ហា', 'error');
                           }
@@ -1671,6 +1677,7 @@ export default function App() {
                       <Trash2 size={18} />
                     </button>
                   </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -1759,6 +1766,20 @@ export default function App() {
                     <label className={labelClasses}>Tags / ពាក្យគន្លឹះ</label>
                     <input type="text" value={tagsInput || ''} onChange={e => setTagsInput(e.target.value)} className={inputClasses} placeholder="គណិតវិទ្យា, ថ្នាក់ទី១, ..." />
                     <p className="text-xs text-slate-500 mt-1">បំបែកពាក្យនីមួយៗដោយប្រើសញ្ញាក្បៀស (,)</p>
+                  </div>
+
+                  <div>
+                    <label className={labelClasses}>ស្ថានភាពបង់ប្រាក់ (Payment Status)</label>
+                    <div className="flex items-center gap-4 mt-2">
+                       <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-300">
+                         <input type="radio" checked={formData.isFree !== false} onChange={() => setFormData({...formData, isFree: true})} className="w-4 h-4 text-blue-600 bg-[#0A0C10] border-slate-600 focus:ring-blue-600 focus:ring-2" />
+                         ឥតគិតថ្លៃ (Free)
+                       </label>
+                       <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-300">
+                         <input type="radio" checked={formData.isFree === false} onChange={() => setFormData({...formData, isFree: false})} className="w-4 h-4 text-blue-600 bg-[#0A0C10] border-slate-600 focus:ring-blue-600 focus:ring-2" />
+                         បង់ប្រាក់ (Paid)
+                       </label>
+                    </div>
                   </div>
 
                   <div>
@@ -1916,6 +1937,60 @@ export default function App() {
         </div>
       )}
       <AnimatePresence>
+        {lockedDocPrompt && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 20 }}
+              className="bg-[#161B22] w-full max-w-md border border-amber-500/20 rounded-2xl overflow-hidden flex flex-col shadow-2xl"
+            >
+              <div className="flex items-center justify-between p-4 border-b border-white/5 bg-amber-500/5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-amber-500/20 text-amber-500 flex items-center justify-center">
+                    <Lock size={20} className="stroke-[2.5]" />
+                  </div>
+                  <h2 className="text-lg font-bold text-white">ឯកសារជាប់សោរ</h2>
+                </div>
+                <button onClick={() => setLockedDocPrompt(null)} className="text-slate-400 hover:text-white p-1 rounded-md hover:bg-white/5 transition"><X size={20}/></button>
+              </div>
+              <div className="p-6">
+                <p className="text-slate-300 text-sm leading-relaxed mb-6">
+                  ឯកសារ <span className="font-bold text-white">"{lockedDocPrompt.title}"</span> នេះតម្រូវឲ្យមានការបង់ប្រាក់។ ដើម្បីអាចចូលមើល និងទាញយកបាន សូមទាក់ទងទៅកាន់ Admin តាមរយៈលេខទូរសព្ទ ឬ Telegram ខាងក្រោម៖
+                </p>
+                
+                <div className="flex flex-col gap-3">
+                  <a href="tel:0973707998" className="flex items-center gap-3 p-4 bg-[#0A0C10] border border-white/5 rounded-xl hover:border-amber-500/30 transition-colors group">
+                    <div className="p-2 bg-blue-500/10 text-blue-400 rounded-lg group-hover:scale-110 transition-transform"><Phone size={20} /></div>
+                    <div>
+                      <div className="text-xs text-slate-500 mb-0.5">លេខទូរសព្ទ</div>
+                      <div className="text-sm font-bold text-white">097 370 7998</div>
+                    </div>
+                  </a>
+                  
+                  <a href="https://t.me/MRPONLEU" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-4 bg-[#0A0C10] border border-white/5 rounded-xl hover:border-amber-500/30 transition-colors group">
+                    <div className="p-2 bg-sky-500/10 text-sky-400 rounded-lg group-hover:scale-110 transition-transform"><MessageCircle size={20} /></div>
+                    <div>
+                      <div className="text-xs text-slate-500 mb-0.5">Telegram</div>
+                      <div className="text-sm font-bold text-white">@MRPONLEU</div>
+                    </div>
+                  </a>
+                </div>
+              </div>
+              <div className="p-4 border-t border-white/5 flex justify-end bg-black/20">
+                <button onClick={() => setLockedDocPrompt(null)} className="px-5 py-2.5 rounded-lg text-sm font-bold text-white bg-white/10 hover:bg-white/20 transition">បិទ</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {viewingDoc && (
           <motion.div
             initial={{ opacity: 0 }}
@@ -1934,7 +2009,12 @@ export default function App() {
                   <button onClick={() => setViewingDoc(null)} className="text-white hover:bg-white/10 rounded-full p-1.5 -ml-1 flex-shrink-0">
                     <ArrowLeft size={24} />
                   </button>
-                  <h2 className="text-lg font-medium text-white truncate">{viewingDoc.title}</h2>
+                  <h2 className="text-lg font-medium text-white truncate flex items-center gap-2">
+                    {viewingDoc.title}
+                    {viewingDoc.isFree === false && (
+                      <span className="px-1.5 py-0.5 text-[10px] font-bold bg-amber-500/10 text-amber-500 rounded flex items-center justify-center shrink-0 hidden sm:flex" title="បង់ប្រាក់"><Lock size={12} className="stroke-[2.5]" /></span>
+                    )}
+                  </h2>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0 ml-2">
                   <button onClick={() => handleDownload(viewingDoc)} className="text-white hover:bg-white/10 rounded-full p-2 whitespace-nowrap min-w-[40px] text-center flex items-center justify-center font-bold">

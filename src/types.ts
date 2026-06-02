@@ -16,5 +16,6 @@ export interface DocumentItem {
   type?: string;
   subType?: string;
   isHidden?: boolean;
+  isFree?: boolean;
   tags?: string[];
 }
