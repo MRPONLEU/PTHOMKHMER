@@ -1,0 +1,22 @@
+@font-face {
+  font-family: 'KH-ABC-TEXT';
+  src: url('./assets/fonts/KH ABC TEXT 04.TTF') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'KhmerOSBattambang';
+  src: url('./assets/fonts/KHMEROSBATTAMBANG.TTF') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Odor Mean Chey", "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+

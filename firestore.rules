@@ -1,0 +1,99 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Global Security Helper Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function getEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    function isSuperAdmin() {
+      return isEmailVerified() && (
+        getEmail() == "broponleu998@gmail.com" ||
+        getEmail() == "mrponleu20000@gmail.com"
+      );
+    }
+
+    function isAdmin() {
+      return isSuperAdmin() || (
+        isEmailVerified() &&
+        exists(/databases/$(database)/documents/admins/$(getEmail()))
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // 3. Collection Rules
+
+    // --- Admins Collection ---
+    match /admins/{adminEmail} {
+      // Admins are identified by their lowercase email as the document ID
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // --- Categories Collection ---
+    match /categories/{categoryId} {
+      allow read: if true; // Public catalogs are publicly readable
+      allow create, update: if isAdmin() && isValidCategory(request.resource.data);
+      allow delete: if isAdmin();
+
+      function isValidCategory(data) {
+        return data.keys().hasAll(['id', 'name', 'subTypes'])
+          && data.id is string && data.id.size() <= 128
+          && data.name is string && data.name.size() <= 200
+          && data.subTypes is list && data.subTypes.size() <= 50;
+      }
+    }
+
+    // --- Documents Collection ---
+    match /docs/{docId} {
+      // General read safety: anyone can read if not hidden. Admins can read anything.
+      allow get: if resource == null || resource.data.isHidden == false || isAdmin();
+      allow list: if resource.data.isHidden == false || isAdmin();
+
+      allow create: if isAdmin() && isValidDoc(request.resource.data);
+      allow delete: if isAdmin();
+
+      allow update: if (
+        // Admin full update authorization
+        (isAdmin() && isValidDoc(request.resource.data)) ||
+        // Visitor/regular user update authorization (ONLY allowed to increment download count by exactly 1)
+        (
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['downloads']) &&
+          request.resource.data.downloads == resource.data.downloads + 1 
+        )
+      );
+
+      function isValidDoc(data) {
+        return data.keys().hasAll(['id', 'title', 'downloadUrl', 'uploadDate', 'downloads'])
+          && data.id is string && data.id.size() <= 128
+          && data.title is string && data.title.size() <= 300
+          && (data.description == null || (data.description is string && data.description.size() <= 2000))
+          && (data.coverUrl == null || (data.coverUrl is string && data.coverUrl.size() <= 2500))
+          && data.downloadUrl is string && data.downloadUrl.size() <= 2500
+          && data.uploadDate is string && data.uploadDate.size() <= 50
+          && (data.downloads is int || data.downloads is float)
+          && (data.type == null || (data.type is string && data.type.size() <= 128))
+          && (data.subType == null || (data.subType is string && data.subType.size() <= 128))
+          && (data.isHidden == null || data.isHidden is bool)
+          && (data.tags == null || data.tags is list);
+      }
+    }
+  }
+}

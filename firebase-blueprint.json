@@ -1,0 +1,115 @@
+{
+  "entities": {
+    "Admin": {
+      "title": "Admin",
+      "description": "Administrative users with management access",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "Email identifier of the administrator"
+        },
+        "addedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when this admin was created or registered"
+        }
+      },
+      "required": ["email"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Document primary and sub-category metadata for sorting and filtering",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the category"
+        },
+        "name": {
+          "type": "string",
+          "description": "Full display name of the primary category"
+        },
+        "subTypes": {
+          "type": "array",
+          "description": "List of sub-category strings belonging to this category"
+        }
+      },
+      "required": ["id", "name"]
+    },
+    "Document": {
+      "title": "Document",
+      "description": "Downloadable file metadata and asset source directories",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the document"
+        },
+        "title": {
+          "type": "string",
+          "description": "Title of the document"
+        },
+        "description": {
+          "type": "string",
+          "description": "Short explanation or description of file contents"
+        },
+        "coverUrl": {
+          "type": "string",
+          "description": "Cover illustration image URL"
+        },
+        "fileSize": {
+          "type": "string",
+          "description": "Human-readable size format, e.g. 1.2 MB"
+        },
+        "fileType": {
+          "type": "string",
+          "description": "MIME or general extension category"
+        },
+        "downloadUrl": {
+          "type": "string",
+          "description": "Download source file link"
+        },
+        "uploadDate": {
+          "type": "string",
+          "description": "Readable uploaded date"
+        },
+        "downloads": {
+          "type": "number",
+          "description": "Counter for successful document downloads"
+        },
+        "type": {
+          "type": "string",
+          "description": "Associated primary category id/name"
+        },
+        "subType": {
+          "type": "string",
+          "description": "Associated sub-category name"
+        },
+        "isHidden": {
+          "type": "boolean",
+          "description": "Hide/show doc in user search catalog"
+        },
+        "tags": {
+          "type": "array",
+          "description": "Custom tag keywords"
+        }
+      },
+      "required": ["id", "title", "downloadUrl", "uploadDate", "downloads"]
+    }
+  },
+  "firestore": {
+    "/admins/{adminId}": {
+      "schema": "Admin",
+      "description": "Administrators database collection"
+    },
+    "/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Document categories configuration dynamic catalog"
+    },
+    "/docs/{docId}": {
+      "schema": "Document",
+      "description": "Uploaded or linked documentation catalog"
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "បណ្ណាល័យបឋម",
+  "short_name": "បណ្ណាល័យ",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "start_url": "/",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}

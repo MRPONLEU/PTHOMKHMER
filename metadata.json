@@ -1,0 +1,8 @@
+{
+  "name": "Remix: Ptomlibrary",
+  "description": "A document sharing website where users can view and download files presented in visual cards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
