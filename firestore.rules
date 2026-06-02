@@ -85,7 +85,7 @@ service cloud.firestore {
           && data.id is string && data.id.size() <= 128
           && data.title is string && data.title.size() <= 300
           && (data.description == null || (data.description is string && data.description.size() <= 2000))
-          && (data.coverUrl == null || (data.coverUrl is string && data.coverUrl.size() <= 2500))
+          && (data.coverUrl == null || (data.coverUrl is string && data.coverUrl.size() <= 1500000))
           && data.downloadUrl is string && data.downloadUrl.size() <= 2500
           && data.uploadDate is string && data.uploadDate.size() <= 50
           && (data.downloads is int || data.downloads is float)
