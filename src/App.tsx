@@ -569,56 +569,93 @@ export default function App() {
   const handleDownload = async (docObj: DocumentItem) => {
     if (downloadingStates[docObj.id] !== undefined) return;
 
+    let downloadUrl = docObj.downloadUrl;
+    const isDrive = downloadUrl && downloadUrl.includes('drive.google.com');
+    if (isDrive) {
+      const regex = /\/d\/([a-zA-Z0-9_-]+)/;
+      const match = downloadUrl.match(regex);
+      if (match && match[1]) {
+        downloadUrl = `https://drive.google.com/uc?export=download&id=${match[1]}`;
+      }
+    }
+
     setDownloadingStates(prev => ({ ...prev, [docObj.id]: 0 }));
-    
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += Math.floor(Math.random() * 15) + 5;
-      if (progress > 90) progress = 90;
-      setDownloadingStates(prev => ({ ...prev, [docObj.id]: progress }));
-    }, 200);
+    let success = false;
 
-    setTimeout(async () => {
-      clearInterval(interval);
-      setDownloadingStates(prev => ({ ...prev, [docObj.id]: 100 }));
-      
-      if (docObj.downloadUrl) {
-        let downloadUrl = docObj.downloadUrl;
-        if (downloadUrl.includes('drive.google.com/')) {
-          const regex = /\/d\/([a-zA-Z0-9_-]+)/;
-          const match = downloadUrl.match(regex);
-          if (match && match[1]) {
-            downloadUrl = `https://drive.google.com/uc?export=download&id=${match[1]}`;
-          }
-        }
-        const link = document.createElement('a');
-        link.href = downloadUrl;
-        link.download = docObj.title || 'download';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        
-        // Fallback for some mobile browsers
-        setTimeout(() => {
-          window.location.href = downloadUrl;
-        }, 100);
-      }
-      
-      try {
-        await updateDoc(doc(db, 'docs', docObj.id), {
-          downloads: (docObj.downloads || 0) + 1
+    try {
+      // Try using the File System Access API to force a native save dialog
+      if ('showSaveFilePicker' in window && !isDrive) {
+        const fileHandle = await (window as any).showSaveFilePicker({
+          suggestedName: docObj.title || 'document',
         });
-      } catch (e) {
-        console.error("Error incrementing downloads:", e);
-      }
+        
+        let progress = 10;
+        const interval = setInterval(() => {
+          progress += Math.floor(Math.random() * 10) + 2;
+          if (progress > 80) progress = 80;
+          setDownloadingStates(prev => ({ ...prev, [docObj.id]: progress }));
+        }, 300);
 
-      setTimeout(() => {
+        const response = await fetch(downloadUrl);
+        if (!response.ok) throw new Error('Network error');
+        const blob = await response.blob();
+        
+        const writable = await fileHandle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        
+        clearInterval(interval);
+        success = true;
+      }
+    } catch (e: any) {
+      if (e.name === 'AbortError') {
+        // User explicitly cancelled the Save dialog
         setDownloadingStates(prev => {
           const next = { ...prev };
           delete next[docObj.id];
           return next;
         });
-      }, 1000);
+        return;
+      }
+      console.warn("Native file picker failed or CORS blocked:", e);
+    }
+
+    if (!success) {
+      // Fallback for browsers without File System Access API or Google Drive links (which block CORS)
+      let progress = 10;
+      const interval = setInterval(() => {
+        progress += Math.floor(Math.random() * 15) + 5;
+        if (progress > 90) progress = 90;
+        setDownloadingStates(prev => ({ ...prev, [docObj.id]: progress }));
+      }, 200);
+
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.target = '_blank';
+      link.download = docObj.title || 'document';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      setTimeout(() => clearInterval(interval), 1500);
+    }
+
+    setDownloadingStates(prev => ({ ...prev, [docObj.id]: 100 }));
+
+    try {
+      await updateDoc(doc(db, 'docs', docObj.id), {
+        downloads: (docObj.downloads || 0) + 1
+      });
+    } catch (e) {
+      console.error("Error incrementing downloads:", e);
+    }
+
+    setTimeout(() => {
+      setDownloadingStates(prev => {
+        const next = { ...prev };
+        delete next[docObj.id];
+        return next;
+      });
     }, 1500);
   };
 
@@ -700,9 +737,45 @@ export default function App() {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (file.size > 20 * 1024 * 1024) {
+        showNotification('រូបភាពធំពេក', 'error');
+        return;
+      }
       const reader = new FileReader();
       reader.onloadend = () => {
-        setFormData({ ...formData, coverUrl: reader.result as string });
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          // Scale down image to max 800px
+          const MAX_SIZE = 800;
+          if (width > height) {
+            if (width > MAX_SIZE) {
+              height *= MAX_SIZE / width;
+              width = MAX_SIZE;
+            }
+          } else {
+            if (height > MAX_SIZE) {
+              width *= MAX_SIZE / height;
+              height = MAX_SIZE;
+            }
+          }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, width, height);
+          
+          // Compress to 70% quality JPEG
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+          
+          if (dataUrl.length > 900000) {
+            showNotification('រូបភាពនៅតែធំពេក សូមជ្រើសរើសរូបភាពផ្សេង', 'error');
+            return;
+          }
+          setFormData({ ...formData, coverUrl: dataUrl });
+        };
+        img.src = reader.result as string;
       };
       reader.readAsDataURL(file);
     }
@@ -1870,6 +1943,9 @@ export default function App() {
                     ) : (
                       <Download size={22} />
                     )}
+                  </button>
+                  <button onClick={() => setViewingDoc(null)} className="text-white hover:bg-white/10 rounded-full p-2 flex items-center justify-center">
+                    <X size={24} />
                   </button>
                 </div>
               </div>
