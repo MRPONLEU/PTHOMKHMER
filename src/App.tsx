@@ -804,9 +804,7 @@ export default function App() {
       <aside className={`fixed lg:static inset-y-0 left-0 bg-[#0A0C10] border-r border-white/10 w-64 z-40 transform transition-transform duration-300 ease-in-out flex flex-col ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0`}>
         <div className="h-20 flex items-center justify-between px-6 border-b border-white/10 shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-sm shrink-0">
-              <Book size={18} className="text-white" />
-            </div>
+            <img src="/icon.ico" alt="Logo" className="w-14 h-14 drop-shadow-lg rounded-lg object-contain" />
             <h1 className="text-2xl font-normal tracking-tight text-white font-['KH-ABC-TEXT']">បណ្ណាល័យ<span className="text-blue-500">បឋម</span></h1>
           </div>
           <button 
