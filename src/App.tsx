@@ -641,107 +641,8 @@ export default function App() {
   }, [docs, deferredSearchTerm, typeFilter, activeTab, isAdminState]);
 
   const allVideoDocs = useMemo(() => {
-    const dbVideos = docs.filter(doc => !!doc.youtubeUrl);
-    
-    const fallbackLessons: DocumentItem[] = [
-      {
-        id: "v-sample-1",
-        title: "គណិតវិទ្យាថ្នាក់ទី១២៖ លីមីតនៃអនុគមន៍ (មេរៀនលម្អិត)",
-        description: "សិក្សាអំពីលីមីតនៃអនុគមន៍ ដោះស្រាយលំហាត់គំរូជាច្រើនដែលធ្លាប់ចេញក្នុងប្រឡងបាក់ឌុបនាឆ្នាំកន្លងទៅ។ បង្រៀនដោយពន្យល់លម្អិត ងាយយល់ រហ័ស និងមានគន្លឹះដោះស្រាយយ៉ាងសម្បូរបែប។",
-        coverUrl: "https://images.unsplash.com/photo-1509228468518-180dd4864904?w=500&auto=format&fit=crop&q=60",
-        downloadUrl: "#",
-        uploadDate: "2026-06-01",
-        downloads: 120,
-        type: "គណិតវិទ្យា",
-        subType: "លីមីត",
-        isFree: true,
-        tags: ["លីមីត", "គណិតវិទ្យា", "ថ្នាក់ទី១២"],
-        youtubeUrl: "https://www.youtube.com/watch?v=R9V4I1D9dCE",
-        duration: "45 នាទី",
-        instructor: "លោកគ្រូ គីម វ៉ាន់ឆាយ",
-        lessonOrder: 1
-      },
-      {
-        id: "v-sample-2",
-        title: "រូបវិទ្យាថ្នាក់ទី១២៖ ទ្រឹស្តីស៊ីនេទិចនៃឧស្ម័ន និងកម្តៅ",
-        description: "មេរៀនរូបវិទ្យាថ្នាក់ទី១២ ជំពូកទី១ សិក្សាអំពីរូបមន្តសំខាន់ៗ ទំនាក់ទំនងរវាងសម្ពាធ មាឌ និងសីតុណ្ហភាពនៃឧស្ម័ន សមស្របបំផុតសម្រាប់ត្រៀមប្រឡងជាតិ។",
-        coverUrl: "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=500&auto=format&fit=crop&q=60",
-        downloadUrl: "#",
-        uploadDate: "2026-06-02",
-        downloads: 85,
-        type: "រូបវិទ្យា",
-        subType: "កម្តៅ",
-        isFree: true,
-        tags: ["រូបវិទ្យា", "ថ្នាក់ទី១២", "ឧស្ម័ន"],
-        youtubeUrl: "https://www.youtube.com/watch?v=F3aJ2pXqJig",
-        duration: "30 នាទី",
-        instructor: "អ្នកគ្រូ សុខ គឹមលាង",
-        lessonOrder: 2
-      },
-      {
-        id: "v-sample-3",
-        title: "គីមីវិទ្យាថ្នាក់ទី១២៖ អាស៊ីត-បាស និងអត្រាប្រតិកម្ម",
-        description: "គន្លឹះក្នុងការដោះស្រាយលំហាត់អាស៊ីត-បាស និងរូបមន្ត pH។ ពន្យល់ទ្រឹស្តីជាមូលដ្ឋាន បូករួមជាមួយការដោះស្រាយវិញ្ញាសាគំរូជាក់ស្តែង។",
-        coverUrl: "https://images.unsplash.com/photo-1603126857599-f6e157fa2fe6?w=500&auto=format&fit=crop&q=60",
-        downloadUrl: "#",
-        uploadDate: "2026-06-04",
-        downloads: 210,
-        type: "គីមីវិទ្យា",
-        subType: "អាស៊ីត-បាស",
-        isFree: false,
-        tags: ["គីមីវិទ្យា", "អាស៊ីត-បាស", "លំហាត់pH"],
-        youtubeUrl: "https://www.youtube.com/watch?v=SghP6N6W8pU",
-        duration: "40 នាទី",
-        instructor: "លោកគ្រូ ហេង ពិសិដ្ឋ",
-        lessonOrder: 3
-      },
-      {
-        id: "v-sample-4",
-        title: "ជីវវិទ្យាថ្នាក់ទី១២៖ ស្វ័យតម្លើងទ្វេនៃម៉ូលេគុល ADN និងការចម្លងក្រម",
-        description: "យល់ដឹងស៊ីជម្រៅអំពីការកកើតឡើងវិញនៃខ្សែ ADN ដំណើរការចម្លង ARN និងការបង្កើតប្រូតេអ៊ីន។ មានគំនូរជីវចលគាំទ្រក្នុងវីដេអូដើម្បីងាយយល់។",
-        coverUrl: "https://images.unsplash.com/photo-1530026405186-ed1ea0ac7a63?w=500&auto=format&fit=crop&q=60",
-        downloadUrl: "#",
-        uploadDate: "2026-06-05",
-        downloads: 145,
-        type: "ជីវវិទ្យា",
-        subType: "សេនេទិច",
-        isFree: true,
-        tags: ["ជីវវិទ្យា", "ADN", "សេនេទិច"],
-        youtubeUrl: "https://www.youtube.com/watch?v=LqUfWvO8v4Y",
-        duration: "35 នាទី",
-        instructor: "លោកគ្រូ ចាន់ ណារិន",
-        lessonOrder: 4
-      },
-      {
-        id: "v-sample-5",
-        title: "អក្សរសាស្ត្រខ្មែរ៖ របៀបសរសេរតែងសេចក្តីបែបពន្យល់ និងពិភាក្សា",
-        description: "មេរៀនណែនាំពីរចនាសម្ព័ន្ធ កថាខណ្ឌ ដកស្រង់គំនិត និងព្រឹត្តិការណ៍ប្រវត្តិសាស្ត្រ សមធម៌ ដកស្រង់តួអង្គក្នុងអក្សរសិល្ប៍ខ្មែរសម្រាប់ការប្រឡងជោគជ័យ។",
-        coverUrl: "https://images.unsplash.com/photo-1456513080510-7bf3a84b82f8?w=500&auto=format&fit=crop&q=60",
-        downloadUrl: "#",
-        uploadDate: "2026-06-06",
-        downloads: 300,
-        type: "អក្សរសាស្ត្រខ្មែរ",
-        subType: "តែងសេចក្តី",
-        isFree: true,
-        tags: ["អក្សរសាស្ត្រខ្មែរ", "តែងសេចក្តី", "បាក់ឌុប"],
-        youtubeUrl: "https://www.youtube.com/watch?v=R9V4I1D9dCE",
-        duration: "25 នាទី",
-        instructor: "លោកគ្រូ ស៊ន សាលី",
-        lessonOrder: 5
-      }
-    ];
-
-    const combined = [...dbVideos];
-    fallbackLessons.forEach(fallback => {
-      if (deletedFallbackIds.includes(fallback.id)) return;
-      const existsInDb = dbVideos.some(v => v.youtubeUrl === fallback.youtubeUrl || v.title === fallback.title);
-      if (!existsInDb) {
-        combined.push(fallback);
-      }
-    });
-
-    return combined;
-  }, [docs, deletedFallbackIds]);
+    return docs.filter(doc => !!doc.youtubeUrl);
+  }, [docs]);
 
   const videoDocs = useMemo(() => {
     return allVideoDocs.filter(doc => {
@@ -3074,11 +2975,11 @@ export default function App() {
               <motion.div
                 initial={{ scale: 0.95 }}
                 animate={{ scale: 1 }}
-                exit={{ scale: 0.95 }}
-                className="bg-[#0E1117] w-full max-w-6xl h-full sm:h-[85vh] lg:h-[750px] sm:rounded-2xl border-0 sm:border border-white/10 flex flex-col lg:flex-row overflow-hidden shadow-2xl"
+                exit={{ scale: 0.1 }}
+                className="bg-[#0E1117] w-full max-w-6xl h-full sm:h-[85vh] sm:max-h-[750px] sm:rounded-2xl border-0 sm:border border-white/10 flex flex-col lg:flex-row overflow-hidden shadow-2xl"
               >
                 {/* LEFT CONSOLE SCREEN (Video Player + Metadatas) */}
-                <div className="flex-1 flex flex-col h-full overflow-hidden bg-black">
+                <div className="flex-1 flex flex-col lg:h-full overflow-hidden bg-black">
                   {/* Top Bar inside Video Panel */}
                   <div className="flex items-center justify-between p-4 bg-[#0A0C10] border-b border-white/5">
                     <span className="text-slate-400 text-xs font-semibold uppercase truncate shrink text-blue-400">
