@@ -2,10 +2,10 @@ import React, { useState, useEffect, useMemo, useDeferredValue } from 'react';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Download, File as FileIcon, Search, Eye, EyeOff, HardDriveDownload, Calendar, Plus, Edit2, Trash2, X, LayoutGrid, Settings, Menu, UploadCloud, ChevronDown, Folder, GripVertical, ArrowUp, ArrowDown, LogOut, LogIn, Filter, Check, Loader2, Book, ArrowLeft, Pause, Lock, Phone, MessageCircle, Facebook } from 'lucide-react';
+import { Download, File as FileIcon, Search, Eye, EyeOff, HardDriveDownload, Calendar, Plus, Edit2, Trash2, X, LayoutGrid, Settings, Menu, UploadCloud, ChevronDown, Folder, GripVertical, ArrowUp, ArrowDown, LogOut, LogIn, Filter, Check, Loader2, Book, ArrowLeft, Pause, Lock, Phone, MessageCircle, Facebook, Youtube, Play } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { DocumentItem } from './types';
-import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
+import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where, increment } from 'firebase/firestore';
 import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import { db, auth, googleProvider, handleFirestoreError, OperationType } from './firebase';
 
@@ -44,9 +44,16 @@ interface User {
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [docs, setDocs] = useState<DocumentItem[]>([]);
+  const [deletedFallbackIds, setDeletedFallbackIds] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('deleted_fallback_videos') || '[]');
+    } catch (e) {
+      return [];
+    }
+  });
 // Initialize activeTab 'manage' and manageTab 'dashboard' if that's the intended default
-  const [activeTab, setActiveTab] = useState<'view' | 'manage'>('view');
-  const [manageTab, setManageTab] = useState<'dashboard' | 'docs' | 'types' | 'admins'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'view' | 'manage' | 'videos'>('view');
+  const [manageTab, setManageTab] = useState<'dashboard' | 'docs' | 'videos' | 'types' | 'video_types' | 'admins'>('dashboard');
   const [searchTerm, setSearchTerm] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isManageExpanded, setIsManageExpanded] = useState(false);
@@ -57,6 +64,8 @@ export default function App() {
   const [downloadingStates, setDownloadingStates] = useState<Record<string, number>>({});
   const [isDocLoading, setIsDocLoading] = useState(true);
   const [lockedDocPrompt, setLockedDocPrompt] = useState<DocumentItem | null>(null);
+  const [activeYoutubeDoc, setActiveYoutubeDoc] = useState<DocumentItem | null>(null);
+  const [showPlaylist, setShowPlaylist] = useState(true);
 
   const toggleCategory = (categoryId: string) => {
     setExpandedCategories(prev => 
@@ -70,15 +79,24 @@ export default function App() {
 
   // Category State
   const [categories, setCategories] = useState<any[]>([]);
+  const [videoCategories, setVideoCategories] = useState<any[]>([]);
   const [usersList, setUsersList] = useState<any[]>([]);
   const [isAdminState, setIsAdminState] = useState(false);
   const [canViewLocked, setCanViewLocked] = useState(false);
+  const [selectedVideoSubject, setSelectedVideoSubject] = useState('ទាំងអស់');
+
+  // Video Category Modal State
+  const [isVideoCategoryModalOpen, setIsVideoCategoryModalOpen] = useState(false);
+  const [editingVideoCategory, setEditingVideoCategory] = useState<any | null>(null);
+  const [videoCategoryModalMode, setVideoCategoryModalMode] = useState<'category' | 'subtype'>('category');
+  const [videoCategoryFormData, setVideoCategoryFormData] = useState({ name: '', subTypes: '' });
 
   // Loading & Error State
   const [isLoadingDocs, setIsLoadingDocs] = useState(true);
   const [isLoadingCategories, setIsLoadingCategories] = useState(true);
+  const [isLoadingVideoCategories, setIsLoadingVideoCategories] = useState(true);
   const [quotaError, setQuotaError] = useState(false);
-  const isLoading = isLoadingDocs || isLoadingCategories;
+  const isLoading = isLoadingDocs || isLoadingCategories || isLoadingVideoCategories;
 
   // 1. Dynamics Auth state synchronization
   useEffect(() => {
@@ -131,6 +149,28 @@ export default function App() {
     });
     return () => {
       unsubscribeCats();
+    };
+  }, []);
+
+  // Video Categories subscription (Always allowed publicly)
+  useEffect(() => {
+    const unsubscribeVideoCats = onSnapshot(collection(db, 'video_categories'), (snapshot) => {
+      const items: any[] = [];
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        items.push({
+          id: doc.id,
+          name: data.name,
+          subTypes: data.subTypes || []
+        });
+      });
+      setVideoCategories(items);
+      setIsLoadingVideoCategories(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'video_categories');
+    });
+    return () => {
+      unsubscribeVideoCats();
     };
   }, []);
 
@@ -200,7 +240,11 @@ export default function App() {
           subType: data.subType || '',
           isHidden: !!data.isHidden,
           isFree: data.isFree !== false, // Default to true if missing
-          tags: data.tags || []
+          tags: data.tags || [],
+          youtubeUrl: data.youtubeUrl || '',
+          duration: data.duration || '',
+          instructor: data.instructor || '',
+          lessonOrder: data.lessonOrder !== undefined ? Number(data.lessonOrder) : undefined
         });
       });
       setDocs(items);
@@ -274,16 +318,64 @@ export default function App() {
 
   const getDriveEmbedUrl = (url: string) => {
     if (!url || typeof url !== 'string' || !url.includes('drive.google.com/')) return url;
-    return url.replace('/view?', '/preview?').replace('/edit?', '/preview?');
+    let embedUrl = url;
+    if (embedUrl.includes('/view')) {
+      embedUrl = embedUrl.replace('/view', '/preview');
+    } else if (embedUrl.includes('/edit')) {
+      embedUrl = embedUrl.replace('/edit', '/preview');
+    }
+    return embedUrl;
   };
 
-  const handleView = (doc: DocumentItem) => {
-    if (doc.isFree === false && !canViewLocked) {
-      setLockedDocPrompt(doc);
+  const getYouTubeEmbedUrl = (url: string) => {
+    if (!url) return '';
+    const cleanUrl = url.trim();
+    
+    // Support youtube.com/shorts, youtube.com/live, watch?v= etc.
+    const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/|youtube\.com\/live\/)([^"&?\/\s]{11})/;
+    const match = cleanUrl.match(regExp);
+    if (match && match[1].length === 11) {
+      return `https://www.youtube.com/embed/${match[1]}?autoplay=1&rel=0`;
+    }
+    
+    // If it's a google drive url, support playing its video inside the iframe
+    if (cleanUrl.includes('drive.google.com/')) {
+      return getDriveEmbedUrl(cleanUrl);
+    }
+    
+    return '';
+  };
+
+  const getYouTubeThumbnail = (url: string) => {
+    if (!url) return '';
+    const cleanUrl = url.trim();
+    if (cleanUrl.includes('drive.google.com/')) {
+      return getDriveImageUrl(cleanUrl);
+    }
+    const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/|youtube\.com\/live\/)([^"&?\/\s]{11})/;
+    const match = cleanUrl.match(regExp);
+    if (match && match[1].length === 11) {
+      return `https://img.youtube.com/vi/${match[1]}/0.jpg`;
+    }
+    return '';
+  };
+
+  const handleView = async (docObj: DocumentItem) => {
+    if (docObj.isFree === false && !canViewLocked) {
+      setLockedDocPrompt(docObj);
       return;
     }
     setIsDocLoading(true);
-    setViewingDoc(doc);
+    setViewingDoc(docObj);
+    try {
+      if (!docObj.id.startsWith('v-sample-')) {
+        await updateDoc(doc(db, 'docs', docObj.id), {
+          downloads: increment(1)
+        });
+      }
+    } catch (e) {
+      console.error("Error tracking view count:", e);
+    }
   };
 
 
@@ -442,6 +534,58 @@ export default function App() {
     );
   };
 
+  // Inline Video Category Management State
+  const [newVideoCategoryName, setNewVideoCategoryName] = useState('');
+  const [newVideoSubTypeNames, setNewVideoSubTypeNames] = useState<{[key: string]: string}>({});
+  const [manageExpandedVideoCategoryIds, setManageExpandedVideoCategoryIds] = useState<string[]>([]);
+
+  const handleInlineAddVideoCategory = async () => {
+    if (!newVideoCategoryName.trim()) return;
+    try {
+      const id = Date.now().toString() + Math.random().toString(36).substring(2, 9);
+      await setDoc(doc(db, 'video_categories', id), {
+        id,
+        name: newVideoCategoryName.trim(),
+        subTypes: []
+      });
+      setNewVideoCategoryName('');
+      showNotification('បន្ថែមប្រភេទវីដេអូបានជោគជ័យ');
+    } catch (e) {
+      console.error(e);
+      showNotification('មានបញ្ហាពេលបន្ថែមប្រភេទវីដេអូ', 'error');
+    }
+  };
+
+  const handleInlineAddVideoSubType = async (categoryId: string) => {
+    const subName = newVideoSubTypeNames[categoryId];
+    if (!subName || !subName.trim()) return;
+    
+    const category = videoCategories.find(c => c.id === categoryId);
+    if (!category) return;
+    
+    try {
+      const newSubTypes = Array.from(new Set([...category.subTypes, subName.trim()]));
+      await updateDoc(doc(db, 'video_categories', categoryId), {
+        subTypes: newSubTypes
+      });
+      setNewVideoSubTypeNames({ ...newVideoSubTypeNames, [categoryId]: '' });
+      showNotification('បន្ថែមប្រភេទរងវីដេអូបានជោគជ័យ');
+    } catch (e) {
+      console.error(e);
+      showNotification('មានបញ្ហាពេលបន្ថែមប្រភេទរងវីដេអូ', 'error');
+    }
+  };
+
+  const handleRemoveVideoSubType = (categoryId: string, subTypeToRemove: string) => {
+    setDeleteConfirm({ isOpen: true, type: 'video_subType', id: categoryId, extra: subTypeToRemove });
+  };
+
+  const toggleManageVideoCategoryExpansion = (categoryId: string) => {
+    setManageExpandedVideoCategoryIds(prev => 
+      prev.includes(categoryId) ? prev.filter(id => id !== categoryId) : [...prev, categoryId]
+    );
+  };
+
   const handleMoveCategoryUp = (index: number) => {
     // Ordering not persisted to Firebase in this simple implementation
   };
@@ -478,7 +622,11 @@ export default function App() {
 
   const filteredDocs = useMemo(() => {
     return docs.filter(doc => {
-      if (activeTab === 'view' && doc.isHidden) return false;
+      if ((activeTab === 'view' || activeTab === 'videos') && doc.isHidden && !isAdminState) return false;
+      
+      // Do not show videos in the documents view tab
+      if (activeTab === 'view' && (doc.youtubeUrl || doc.fileType === 'YouTube' || doc.fileSize === 'Video')) return false;
+
       const searchLower = deferredSearchTerm.toLowerCase().trim();
       const matchesSearch = doc.title.toLowerCase().includes(searchLower) || 
                             (doc.description && doc.description.toLowerCase().includes(searchLower)) ||
@@ -490,7 +638,170 @@ export default function App() {
         : true;
       return matchesSearch && matchesType;
     });
-  }, [docs, deferredSearchTerm, typeFilter, activeTab]);
+  }, [docs, deferredSearchTerm, typeFilter, activeTab, isAdminState]);
+
+  const allVideoDocs = useMemo(() => {
+    const dbVideos = docs.filter(doc => !!doc.youtubeUrl);
+    
+    const fallbackLessons: DocumentItem[] = [
+      {
+        id: "v-sample-1",
+        title: "គណិតវិទ្យាថ្នាក់ទី១២៖ លីមីតនៃអនុគមន៍ (មេរៀនលម្អិត)",
+        description: "សិក្សាអំពីលីមីតនៃអនុគមន៍ ដោះស្រាយលំហាត់គំរូជាច្រើនដែលធ្លាប់ចេញក្នុងប្រឡងបាក់ឌុបនាឆ្នាំកន្លងទៅ។ បង្រៀនដោយពន្យល់លម្អិត ងាយយល់ រហ័ស និងមានគន្លឹះដោះស្រាយយ៉ាងសម្បូរបែប។",
+        coverUrl: "https://images.unsplash.com/photo-1509228468518-180dd4864904?w=500&auto=format&fit=crop&q=60",
+        downloadUrl: "#",
+        uploadDate: "2026-06-01",
+        downloads: 120,
+        type: "គណិតវិទ្យា",
+        subType: "លីមីត",
+        isFree: true,
+        tags: ["លីមីត", "គណិតវិទ្យា", "ថ្នាក់ទី១២"],
+        youtubeUrl: "https://www.youtube.com/watch?v=R9V4I1D9dCE",
+        duration: "45 នាទី",
+        instructor: "លោកគ្រូ គីម វ៉ាន់ឆាយ",
+        lessonOrder: 1
+      },
+      {
+        id: "v-sample-2",
+        title: "រូបវិទ្យាថ្នាក់ទី១២៖ ទ្រឹស្តីស៊ីនេទិចនៃឧស្ម័ន និងកម្តៅ",
+        description: "មេរៀនរូបវិទ្យាថ្នាក់ទី១២ ជំពូកទី១ សិក្សាអំពីរូបមន្តសំខាន់ៗ ទំនាក់ទំនងរវាងសម្ពាធ មាឌ និងសីតុណ្ហភាពនៃឧស្ម័ន សមស្របបំផុតសម្រាប់ត្រៀមប្រឡងជាតិ។",
+        coverUrl: "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=500&auto=format&fit=crop&q=60",
+        downloadUrl: "#",
+        uploadDate: "2026-06-02",
+        downloads: 85,
+        type: "រូបវិទ្យា",
+        subType: "កម្តៅ",
+        isFree: true,
+        tags: ["រូបវិទ្យា", "ថ្នាក់ទី១២", "ឧស្ម័ន"],
+        youtubeUrl: "https://www.youtube.com/watch?v=F3aJ2pXqJig",
+        duration: "30 នាទី",
+        instructor: "អ្នកគ្រូ សុខ គឹមលាង",
+        lessonOrder: 2
+      },
+      {
+        id: "v-sample-3",
+        title: "គីមីវិទ្យាថ្នាក់ទី១២៖ អាស៊ីត-បាស និងអត្រាប្រតិកម្ម",
+        description: "គន្លឹះក្នុងការដោះស្រាយលំហាត់អាស៊ីត-បាស និងរូបមន្ត pH។ ពន្យល់ទ្រឹស្តីជាមូលដ្ឋាន បូករួមជាមួយការដោះស្រាយវិញ្ញាសាគំរូជាក់ស្តែង។",
+        coverUrl: "https://images.unsplash.com/photo-1603126857599-f6e157fa2fe6?w=500&auto=format&fit=crop&q=60",
+        downloadUrl: "#",
+        uploadDate: "2026-06-04",
+        downloads: 210,
+        type: "គីមីវិទ្យា",
+        subType: "អាស៊ីត-បាស",
+        isFree: false,
+        tags: ["គីមីវិទ្យា", "អាស៊ីត-បាស", "លំហាត់pH"],
+        youtubeUrl: "https://www.youtube.com/watch?v=SghP6N6W8pU",
+        duration: "40 នាទី",
+        instructor: "លោកគ្រូ ហេង ពិសិដ្ឋ",
+        lessonOrder: 3
+      },
+      {
+        id: "v-sample-4",
+        title: "ជីវវិទ្យាថ្នាក់ទី១២៖ ស្វ័យតម្លើងទ្វេនៃម៉ូលេគុល ADN និងការចម្លងក្រម",
+        description: "យល់ដឹងស៊ីជម្រៅអំពីការកកើតឡើងវិញនៃខ្សែ ADN ដំណើរការចម្លង ARN និងការបង្កើតប្រូតេអ៊ីន។ មានគំនូរជីវចលគាំទ្រក្នុងវីដេអូដើម្បីងាយយល់។",
+        coverUrl: "https://images.unsplash.com/photo-1530026405186-ed1ea0ac7a63?w=500&auto=format&fit=crop&q=60",
+        downloadUrl: "#",
+        uploadDate: "2026-06-05",
+        downloads: 145,
+        type: "ជីវវិទ្យា",
+        subType: "សេនេទិច",
+        isFree: true,
+        tags: ["ជីវវិទ្យា", "ADN", "សេនេទិច"],
+        youtubeUrl: "https://www.youtube.com/watch?v=LqUfWvO8v4Y",
+        duration: "35 នាទី",
+        instructor: "លោកគ្រូ ចាន់ ណារិន",
+        lessonOrder: 4
+      },
+      {
+        id: "v-sample-5",
+        title: "អក្សរសាស្ត្រខ្មែរ៖ របៀបសរសេរតែងសេចក្តីបែបពន្យល់ និងពិភាក្សា",
+        description: "មេរៀនណែនាំពីរចនាសម្ព័ន្ធ កថាខណ្ឌ ដកស្រង់គំនិត និងព្រឹត្តិការណ៍ប្រវត្តិសាស្ត្រ សមធម៌ ដកស្រង់តួអង្គក្នុងអក្សរសិល្ប៍ខ្មែរសម្រាប់ការប្រឡងជោគជ័យ។",
+        coverUrl: "https://images.unsplash.com/photo-1456513080510-7bf3a84b82f8?w=500&auto=format&fit=crop&q=60",
+        downloadUrl: "#",
+        uploadDate: "2026-06-06",
+        downloads: 300,
+        type: "អក្សរសាស្ត្រខ្មែរ",
+        subType: "តែងសេចក្តី",
+        isFree: true,
+        tags: ["អក្សរសាស្ត្រខ្មែរ", "តែងសេចក្តី", "បាក់ឌុប"],
+        youtubeUrl: "https://www.youtube.com/watch?v=R9V4I1D9dCE",
+        duration: "25 នាទី",
+        instructor: "លោកគ្រូ ស៊ន សាលី",
+        lessonOrder: 5
+      }
+    ];
+
+    const combined = [...dbVideos];
+    fallbackLessons.forEach(fallback => {
+      if (deletedFallbackIds.includes(fallback.id)) return;
+      const existsInDb = dbVideos.some(v => v.youtubeUrl === fallback.youtubeUrl || v.title === fallback.title);
+      if (!existsInDb) {
+        combined.push(fallback);
+      }
+    });
+
+    return combined;
+  }, [docs, deletedFallbackIds]);
+
+  const videoDocs = useMemo(() => {
+    return allVideoDocs.filter(doc => {
+      if (doc.isHidden && !isAdminState) return false;
+      const searchLower = deferredSearchTerm.toLowerCase().trim();
+      const matchesSearch = doc.title.toLowerCase().includes(searchLower) || 
+                            (doc.description && doc.description.toLowerCase().includes(searchLower)) ||
+                            (doc.type && doc.type.toLowerCase().includes(searchLower)) ||
+                            (doc.subType && doc.subType.toLowerCase().includes(searchLower)) ||
+                            (doc.tags && doc.tags.some(tag => tag.toLowerCase().includes(searchLower)));
+      const matchesType = typeFilter 
+        ? (doc.type === typeFilter.type && (!typeFilter.subType || doc.subType === typeFilter.subType))
+        : true;
+      return matchesSearch && matchesType;
+    });
+  }, [allVideoDocs, deferredSearchTerm, typeFilter, isAdminState]);
+
+  const videoSubjects = useMemo(() => {
+    const types = new Set<string>();
+    allVideoDocs.forEach(d => { if (d.type) types.add(d.type); });
+    return ['ទាំងអស់', ...Array.from(types).sort((a, b) => a.localeCompare(b, 'km'))];
+  }, [allVideoDocs]);
+
+  const displayVideos = useMemo(() => {
+    return videoDocs.filter(doc => {
+      if (selectedVideoSubject === 'ទាំងអស់') return true;
+      return doc.type === selectedVideoSubject;
+    });
+  }, [videoDocs, selectedVideoSubject]);
+
+  const groupedVideos = useMemo(() => {
+    const groups: { [key: string]: DocumentItem[] } = {};
+    displayVideos.forEach(vid => {
+      const chapter = vid.type || 'ផ្សេងៗ';
+      if (!groups[chapter]) {
+        groups[chapter] = [];
+      }
+      groups[chapter].push(vid);
+    });
+    
+    return Object.keys(groups).sort((a, b) => {
+      if (a === 'ផ្សេងៗ') return 1;
+      if (b === 'ផ្សេងៗ') return -1;
+      return a.localeCompare(b, 'km');
+    }).map(chapter => ({
+      chapter,
+      videos: groups[chapter].sort((a, b) => {
+        const orderA = a.lessonOrder !== undefined ? a.lessonOrder : 999;
+        const orderB = b.lessonOrder !== undefined ? b.lessonOrder : 999;
+        return orderA - orderB;
+      })
+    }));
+  }, [displayVideos]);
+
+  const featuredVideo = useMemo(() => {
+    if (displayVideos.length === 0) return null;
+    // Find the first free video as a showcase highlight, or just fallback to the first
+    const freeVid = displayVideos.find(v => v.isFree !== false);
+    return freeVid || displayVideos[0];
+  }, [displayVideos]);
 
   const groupedDocs = useMemo(() => {
     const groups: { [key: string]: typeof docs } = {};
@@ -523,7 +834,11 @@ export default function App() {
       uploadDate: new Date().toISOString().split('T')[0],
       downloads: 0,
       isFree: true,
-      tags: []
+      tags: [],
+      youtubeUrl: '',
+      duration: '',
+      instructor: '',
+      lessonOrder: undefined
     });
     setIsModalOpen(true);
   };
@@ -535,7 +850,7 @@ export default function App() {
     setIsModalOpen(true);
   };
 
-  const [deleteConfirm, setDeleteConfirm] = useState<{isOpen: boolean, type: 'doc' | 'category' | 'subType', id: string, extra?: string}>({isOpen: false, type: 'doc', id: ''});
+  const [deleteConfirm, setDeleteConfirm] = useState<{isOpen: boolean, type: 'doc' | 'category' | 'subType' | 'video_category' | 'video_subType', id: string, extra?: string}>({isOpen: false, type: 'doc', id: ''});
 
   const handleDelete = (id: string) => {
     setDeleteConfirm({ isOpen: true, type: 'doc', id });
@@ -576,16 +891,56 @@ export default function App() {
     setDeleteConfirm({ isOpen: true, type: 'category', id });
   };
 
+  const openAddVideoCategoryModal = () => {
+    setEditingVideoCategory(null);
+    setVideoCategoryModalMode('category');
+    setVideoCategoryFormData({ name: '', subTypes: '' });
+    setIsVideoCategoryModalOpen(true);
+  };
+
+  const openAddVideoSubTypeModal = () => {
+    setEditingVideoCategory(null);
+    setVideoCategoryModalMode('subtype');
+    setVideoCategoryFormData({ name: videoCategories.length > 0 ? videoCategories[0].name : '', subTypes: '' });
+    setIsVideoCategoryModalOpen(true);
+  };
+
+  const openEditVideoCategoryModal = (category: any) => {
+    setEditingVideoCategory(category);
+    setVideoCategoryModalMode('category');
+    setVideoCategoryFormData({ name: category.name, subTypes: category.subTypes.join(', ') });
+    setIsVideoCategoryModalOpen(true);
+  };
+
+  const handleDeleteVideoCategory = (id: string) => {
+    setDeleteConfirm({ isOpen: true, type: 'video_category', id });
+  };
+
   const proceedDelete = async () => {
     try {
       if (deleteConfirm.type === 'doc') {
-        await deleteDoc(doc(db, 'docs', deleteConfirm.id));
+        if (deleteConfirm.id.startsWith('v-sample-')) {
+          const updated = [...deletedFallbackIds, deleteConfirm.id];
+          setDeletedFallbackIds(updated);
+          localStorage.setItem('deleted_fallback_videos', JSON.stringify(updated));
+        } else {
+          await deleteDoc(doc(db, 'docs', deleteConfirm.id));
+        }
       } else if (deleteConfirm.type === 'category') {
         await deleteDoc(doc(db, 'categories', deleteConfirm.id));
+      } else if (deleteConfirm.type === 'video_category') {
+        await deleteDoc(doc(db, 'video_categories', deleteConfirm.id));
       } else if (deleteConfirm.type === 'subType' && deleteConfirm.extra) {
         const category = categories.find(c => c.id === deleteConfirm.id);
         if (category) {
           await updateDoc(doc(db, 'categories', deleteConfirm.id), {
+            subTypes: category.subTypes.filter((s: string) => s !== deleteConfirm.extra)
+          });
+        }
+      } else if (deleteConfirm.type === 'video_subType' && deleteConfirm.extra) {
+        const category = videoCategories.find(c => c.id === deleteConfirm.id);
+        if (category) {
+          await updateDoc(doc(db, 'video_categories', deleteConfirm.id), {
             subTypes: category.subTypes.filter((s: string) => s !== deleteConfirm.extra)
           });
         }
@@ -596,6 +951,58 @@ export default function App() {
       showNotification('មានបញ្ហាពេលលុបទិន្នន័យ', 'error');
     }
     setDeleteConfirm({ isOpen: false, type: 'doc', id: '' });
+  };
+
+  const handleVideoCategorySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const subs = videoCategoryFormData.subTypes.split(',').map(s => s.trim()).filter(s => s);
+    try {
+      if (editingVideoCategory) {
+        await updateDoc(doc(db, 'video_categories', editingVideoCategory.id), {
+          name: videoCategoryFormData.name,
+          subTypes: subs
+        });
+      } else {
+        if (videoCategoryModalMode === 'subtype') {
+          const category = videoCategories.find(c => c.name === videoCategoryFormData.name);
+          if (category) {
+            const newSubtypes = Array.from(new Set([...category.subTypes, ...subs]));
+            await updateDoc(doc(db, 'video_categories', category.id), {
+              subTypes: newSubtypes
+            });
+          }
+        } else {
+          const id = Date.now().toString() + Math.random().toString(36).substring(2, 9);
+          await setDoc(doc(db, 'video_categories', id), {
+            id,
+            name: videoCategoryFormData.name,
+            subTypes: subs
+          });
+        }
+      }
+      setIsVideoCategoryModalOpen(false);
+      showNotification('រក្សាទុកប្រភេទវីដេអូបានជោគជ័យ');
+    } catch (e) {
+      console.error(e);
+      showNotification('មានបញ្ហាពេលរក្សាទុកប្រភេទវីដេអូ', 'error');
+    }
+  };
+
+  const handlePlayVideo = async (docObj: DocumentItem) => {
+    if (docObj.isFree === false && !canViewLocked) {
+      setLockedDocPrompt(docObj);
+      return;
+    }
+    setActiveYoutubeDoc(docObj);
+    try {
+      if (!docObj.id.startsWith('v-sample-')) {
+        await updateDoc(doc(db, 'docs', docObj.id), {
+          downloads: increment(1)
+        });
+      }
+    } catch (e) {
+      console.error("Error tracking view count:", e);
+    }
   };
 
   const handleDownload = async (docObj: DocumentItem) => {
@@ -697,21 +1104,35 @@ export default function App() {
         ...formData, 
         tags: tagsInput.split(',').map(t => t.trim()).filter(Boolean) 
       };
+
+      // Auto thumbnail extraction from YouTube
+      if (!finalData.coverUrl && finalData.youtubeUrl) {
+        finalData.coverUrl = getYouTubeThumbnail(finalData.youtubeUrl);
+      }
+
+      // Default blank downloadUrl to youtubeUrl or '#' to satisfy rules schema
+      const downloadLinkVal = finalData.downloadUrl && finalData.downloadUrl.trim() !== '' 
+        ? finalData.downloadUrl 
+        : (finalData.youtubeUrl || '#');
       
       const details = {
         title: finalData.title || '',
         description: finalData.description || '',
         coverUrl: finalData.coverUrl || '',
-        fileSize: finalData.fileSize || '',
-        fileType: finalData.fileType || '',
-        downloadUrl: finalData.downloadUrl || '',
-        uploadDate: finalData.uploadDate || '',
+        fileSize: finalData.fileSize || ((activeTab === 'videos' || (activeTab === 'manage' && manageTab === 'videos')) ? 'Video' : ''),
+        fileType: finalData.fileType || ((activeTab === 'videos' || (activeTab === 'manage' && manageTab === 'videos')) ? 'YouTube' : ''),
+        downloadUrl: downloadLinkVal,
+        uploadDate: finalData.uploadDate || new Date().toISOString().split('T')[0],
         downloads: Number(finalData.downloads || 0),
         type: finalData.type || '',
         subType: finalData.subType || '',
         isHidden: !!finalData.isHidden,
         isFree: finalData.isFree !== false,
-        tags: finalData.tags || []
+        tags: finalData.tags || [],
+        youtubeUrl: finalData.youtubeUrl || '',
+        duration: finalData.duration || '',
+        instructor: finalData.instructor || '',
+        lessonOrder: finalData.lessonOrder !== undefined ? Number(finalData.lessonOrder) : 0
       };
 
       if (editingDoc) {
@@ -833,6 +1254,13 @@ export default function App() {
           >
             <Book size={18}/> ឯកសារទាំងអស់
           </button>
+
+          <button
+            onClick={() => { setActiveTab('videos'); setIsSidebarOpen(false); setSearchTerm(''); }}
+            className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'videos' ? 'bg-blue-600/10 text-blue-500' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+          >
+            <Youtube size={18}/> វីដេអូមេរៀន
+          </button>
           
           {isAdminUser && (
             <div className="flex flex-col">
@@ -861,10 +1289,22 @@ export default function App() {
                         គ្រប់គ្រងឯកសារ
                       </button>
                       <button
+                        onClick={() => { setActiveTab('manage'); setManageTab('videos'); setIsSidebarOpen(false); }}
+                        className={`text-left text-sm py-2 px-3 rounded-md transition-colors ${activeTab === 'manage' && manageTab === 'videos' ? 'bg-blue-600/20 text-blue-400 font-semibold' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}
+                      >
+                        គ្រប់គ្រងវីដេអូ
+                      </button>
+                      <button
                         onClick={() => { setActiveTab('manage'); setManageTab('types'); setIsSidebarOpen(false); }}
                         className={`text-left text-sm py-2 px-3 rounded-md transition-colors ${activeTab === 'manage' && manageTab === 'types' ? 'bg-blue-600/20 text-blue-400 font-semibold' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}
                       >
                         ប្រភេទឯកសារ
+                      </button>
+                      <button
+                        onClick={() => { setActiveTab('manage'); setManageTab('video_types'); setIsSidebarOpen(false); }}
+                        className={`text-left text-sm py-2 px-3 rounded-md transition-colors ${activeTab === 'manage' && manageTab === 'video_types' ? 'bg-blue-600/20 text-blue-400 font-semibold' : 'text-slate-500 hover:text-slate-300 hover:bg-white/5'}`}
+                      >
+                        ប្រភេទវីដេអូ
                       </button>
                       <button
                         onClick={() => { setActiveTab('manage'); setManageTab('admins'); setIsSidebarOpen(false); }}
@@ -1081,17 +1521,23 @@ export default function App() {
                               onClick={() => {
                                 setTypeFilter(null);
                                 setIsFilterDropdownOpen(false);
-                                setActiveTab('view');
+                                if (activeTab === 'videos') {
+                                  setActiveTab('videos');
+                                } else {
+                                  setActiveTab('view');
+                                }
                                 setSearchTerm('');
                               }}
                             >
                               <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${!typeFilter ? 'border-blue-500' : 'border-slate-500'}`}>
                                 {!typeFilter && <div className="w-2 h-2 rounded-full bg-blue-500"></div>}
                               </div>
-                              <span className={!typeFilter ? "text-white font-medium" : "text-slate-300"}>ឯកសារទាំងអស់</span>
+                              <span className={!typeFilter ? "text-white font-medium" : "text-slate-300"}>
+                                {activeTab === 'videos' ? 'វីដេអូទាំងអស់' : 'ឯកសារទាំងអស់'}
+                              </span>
                             </div>
                             
-                            {categories.map((c) => (
+                            {(activeTab === 'videos' ? videoCategories : categories).map((c) => (
                               <div key={c.id} className="mt-4">
                                 <div 
                                   className="flex items-center justify-between px-3 py-1 cursor-pointer"
@@ -1109,7 +1555,11 @@ export default function App() {
                                     onClick={() => {
                                       setTypeFilter({ type: c.name, subType: null });
                                       setIsFilterDropdownOpen(false);
-                                      setActiveTab('view');
+                                      if (activeTab === 'videos') {
+                                        setActiveTab('videos');
+                                      } else {
+                                        setActiveTab('view');
+                                      }
                                       setSearchTerm('');
                                     }}
                                   >
@@ -1125,7 +1575,11 @@ export default function App() {
                                         onClick={() => {
                                           setTypeFilter({ type: c.name, subType: sub });
                                           setIsFilterDropdownOpen(false);
-                                          setActiveTab('view');
+                                          if (activeTab === 'videos') {
+                                            setActiveTab('videos');
+                                          } else {
+                                            setActiveTab('view');
+                                          }
                                           setSearchTerm('');
                                         }}
                                       >
@@ -1156,16 +1610,26 @@ export default function App() {
         <main className="flex-1 overflow-y-auto w-full px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-8">
         
         {/* Dynamic Headings based on Tab */}
-        {((activeTab === 'manage' && isAdminUser) || (activeTab === 'view' && typeFilter)) && (
+        {((activeTab === 'manage' && isAdminUser) || ((activeTab === 'view' || activeTab === 'videos') && typeFilter) || activeTab === 'videos') && (
           <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-6 max-w-full">
             <div className="max-w-2xl">
               {activeTab === 'manage' && (
                 <>
                   <h2 className="text-2xl font-extrabold text-white mb-3 leading-tight uppercase tracking-tight">
-                    {manageTab === 'docs' ? 'គ្រប់គ្រងឯកសារ' : manageTab === 'types' ? 'ប្រភេទឯកសារ' : manageTab === 'dashboard' ? 'ផ្ទាំងរបាយការណ៍សង្ខេប' : 'គ្រប់គ្រងសិទ្ធិជាន់ខ្ពស់'}
+                    {manageTab === 'docs' ? 'គ្រប់គ្រងឯកសារ' : manageTab === 'videos' ? 'គ្រប់គ្រងវីដេអូ' : manageTab === 'types' ? 'ប្រភេទឯកសារ' : manageTab === 'video_types' ? 'ប្រភេទវីដេអូ' : manageTab === 'dashboard' ? 'ផ្ទាំងរបាយការណ៍សង្ខេប' : 'គ្រប់គ្រងសិទ្ធិជាន់ខ្ពស់'}
                   </h2>
                   <p className="text-slate-400 text-base">
-                    {manageTab === 'docs' ? 'បញ្ចូល កែប្រែ ឬលុបឯកសារចេញពីប្រព័ន្ធកណ្តាលរបស់អ្នក។' : manageTab === 'types' ? 'បង្ហាញ ឬបង្កើតប្រភេទឯកសារថ្មីៗ និងប្រភេទរងរបស់វា។' : manageTab === 'dashboard' ? 'មើលទិន្នន័យរួម និងចំណាត់ថ្នាក់ឯកសារ។' : 'បន្ថែមឫដកសិទ្ធិគណនីរបស់អ្នកផ្សេងឲ្យធ្វើជា Admin។'}
+                    {manageTab === 'docs' ? 'បញ្ចូល កែប្រែ ឬលុបឯកសារចេញពីប្រព័ន្ធកណ្តាលរបស់អ្នក។' : manageTab === 'videos' ? 'បញ្ចូល កែប្រែ ឬលុបវីដេអូចេញពីប្រព័ន្ធកណ្តាលរបស់អ្នក។' : manageTab === 'types' ? 'បង្ហាញ ឬបង្កើតប្រភេទឯកសារថ្មីៗ និងប្រភេទរងរបស់វា។' : manageTab === 'video_types' ? 'បង្ហាញ ឬបង្កើតប្រភេទវីដេអូថ្មីៗ និងប្រភេទរងរបស់វា។' : manageTab === 'dashboard' ? 'មើលទិន្នន័យរួម និងចំណាត់ថ្នាក់ឯកសារ។' : 'បន្ថែមឫដកសិទ្ធិគណនីរបស់អ្នកផ្សេងឲ្យធ្វើជា Admin។'}
+                  </p>
+                </>
+              )}
+              {activeTab === 'videos' && (
+                <>
+                  <h2 className="text-2xl font-extrabold text-white mb-3 leading-tight uppercase tracking-tight">
+                    {typeFilter ? (typeFilter.subType ? `${typeFilter.type} - ${typeFilter.subType}` : typeFilter.type) : 'វីដេអូមេរៀនទាំងអស់'}
+                  </h2>
+                  <p className="text-slate-400 text-base">
+                    រៀនសូត្រតាមរយៈវីដេអូបង្រៀនលម្អិតជាមួយការបកស្រាយក្បោះក្បាយពីលោកគ្រូ អ្នកគ្រូ។
                   </p>
                 </>
               )}
@@ -1187,13 +1651,137 @@ export default function App() {
                     បញ្ចូលឯកសារថ្មី
                   </button>
                 )}
+                {manageTab === 'videos' && (
+                  <button
+                    onClick={openAddModal}
+                    className="px-5 py-3 sm:py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl sm:rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-colors shadow-sm whitespace-nowrap w-full sm:w-auto"
+                  >
+                    <Plus size={18} />
+                    បញ្ចូលវីដេអូថ្មី
+                  </button>
+                )}
               </div>
             )}
           </div>
         )}
 
         <div className="mt-6">
-          {activeTab === 'manage' && isAdminUser && manageTab === 'types' ? (
+          {activeTab === 'manage' && isAdminUser && manageTab === 'video_types' ? (
+            <div className="flex flex-col gap-6 max-w-3xl pb-12">
+              {/* Add New Video Category Card */}
+              <div className="bg-[#161B22] border border-white/5 rounded-2xl p-6">
+                <div className="flex flex-col gap-4">
+                  <input 
+                    type="text" 
+                    value={newVideoCategoryName}
+                    onChange={(e) => setNewVideoCategoryName(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleInlineAddVideoCategory()}
+                    placeholder="បញ្ចូលប្រភេទវីដេអូថ្មី" 
+                    className="w-full bg-[#0A0C10] border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                  />
+                  <button 
+                    onClick={handleInlineAddVideoCategory}
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2 text-sm transition-colors"
+                  >
+                    <Plus size={18} /> បន្ថែមប្រភេទវីដេអូ
+                  </button>
+                </div>
+              </div>
+
+              {/* Video Category List */}
+              <div className="flex flex-col gap-4">
+                {videoCategories.length === 0 ? (
+                  <div className="text-center py-8 text-[#E2E8F0] italic rounded-2xl bg-[#161B22] border border-white/5">គ្មានប្រភេទវីដេអូទេ (No video categories)</div>
+                ) : (
+                  videoCategories.map((category) => {
+                    const isExpanded = manageExpandedVideoCategoryIds.includes(category.id);
+                    return (
+                      <div key={category.id} className="bg-[#161B22] border border-white/5 rounded-2xl overflow-hidden flex flex-col">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3 sm:p-4 bg-[#161B22] gap-3">
+                          <div className="flex items-center gap-2 sm:gap-4 flex-1 cursor-pointer min-w-0" onClick={() => toggleManageVideoCategoryExpansion(category.id)}>
+                            <div className="text-slate-500 hover:text-slate-300 transition-colors shrink-0">
+                              <GripVertical size={18} className="sm:w-5 sm:h-5" />
+                            </div>
+                            <button className="text-slate-400 hover:text-white transition-colors p-1 rounded-md hover:bg-white/5 shrink-0">
+                              <ChevronDown size={18} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                            </button>
+                            <span className="text-white font-bold text-base flex-1 truncate" title={category.name}>{category.name}</span>
+                          </div>
+                          <div className="flex items-center justify-between sm:justify-end gap-1 sm:gap-2 border-t sm:border-t-0 sm:border-l border-white/10 pt-3 sm:pt-0 sm:pl-4 mt-1 sm:mt-0 px-1 sm:px-0 shrink-0">
+                            <div className="flex items-center gap-1 sm:gap-2">
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); openEditVideoCategoryModal(category); }}
+                                className="p-2.5 sm:p-2 text-slate-400 hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors"
+                              >
+                                <Edit2 size={16} className="sm:w-4 sm:h-4 w-5 h-5" />
+                              </button>
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); handleDeleteVideoCategory(category.id); }}
+                                className="p-2.5 sm:p-2 text-rose-500 hover:text-rose-400 hover:bg-rose-500/10 rounded transition-colors flex items-center gap-1.5"
+                              >
+                                <Trash2 size={16} className="sm:w-4 sm:h-4 w-5 h-5" />
+                                <span className="sm:hidden text-xs font-medium">លុប</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        <AnimatePresence>
+                          {isExpanded && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: 'auto', opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              className="overflow-hidden bg-[#0A0C10]/30 border-t border-white/5"
+                            >
+                              <div className="p-6 flex flex-col gap-4">
+                                <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                                  ប្រភេទរង (SUB-CATEGORIES):
+                                </div>
+                                
+                                {category.subTypes.length === 0 ? (
+                                  <div className="text-slate-500 text-sm italic">គ្មានប្រភេទរងទេ (No sub-categories)</div>
+                                ) : (
+                                  <div className="flex flex-wrap gap-2 mb-2">
+                                    {category.subTypes.map((sub: string) => (
+                                      <div key={sub} className="flex items-center gap-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-full pl-4 text-sm text-slate-300">
+                                        <span>{sub}</span>
+                                        <button onClick={() => handleRemoveVideoSubType(category.id, sub)} className="text-slate-500 hover:text-red-400 hover:bg-white/5 rounded-full p-1 transition-colors ml-1">
+                                          <X size={14} />
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+
+                                {/* Inline Add Sub-Type */}
+                                <div className="flex gap-2 max-w-md mt-2">
+                                  <input 
+                                    type="text" 
+                                    value={newVideoSubTypeNames[category.id] || ''}
+                                    onChange={(e) => setNewVideoSubTypeNames({ ...newVideoSubTypeNames, [category.id]: e.target.value })}
+                                    onKeyDown={(e) => e.key === 'Enter' && handleInlineAddVideoSubType(category.id)}
+                                    placeholder="បញ្ចូលប្រភេទរងថ្មី..." 
+                                    className="flex-1 bg-[#0A0C10] border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                                  />
+                                  <button 
+                                    onClick={() => handleInlineAddVideoSubType(category.id)}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-1.5 rounded-lg transition-colors flex items-center gap-1"
+                                  >
+                                    <Plus size={12} /> បន្ថែម
+                                  </button>
+                                </div>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          ) : activeTab === 'manage' && isAdminUser && manageTab === 'types' ? (
             <div className="flex flex-col gap-6 max-w-3xl pb-12">
               {/* Add New Category Card */}
               <div className="bg-[#161B22] border border-white/5 rounded-2xl p-6">
@@ -1278,7 +1866,23 @@ export default function App() {
                                 </div>
                               )}
 
-
+                              {/* Inline Add Sub-Type */}
+                              <div className="flex gap-2 max-w-md mt-2">
+                                <input 
+                                  type="text" 
+                                  value={newSubTypeNames[category.id] || ''}
+                                  onChange={(e) => setNewSubTypeNames({ ...newSubTypeNames, [category.id]: e.target.value })}
+                                  onKeyDown={(e) => e.key === 'Enter' && handleInlineAddSubType(category.id)}
+                                  placeholder="បញ្ចូលប្រភេទរងថ្មី..." 
+                                  className="flex-1 bg-[#0A0C10] border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                                />
+                                <button 
+                                  onClick={() => handleInlineAddSubType(category.id)}
+                                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-1.5 rounded-lg transition-colors flex items-center gap-1"
+                                >
+                                  <Plus size={12} /> បន្ថែម
+                                </button>
+                              </div>
                             </div>
                           </motion.div>
                         )}
@@ -1288,7 +1892,7 @@ export default function App() {
                 })}
               </div>
             </div>
-        ) : isLoading ? (
+          ) : isLoading ? (
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -1310,90 +1914,220 @@ export default function App() {
               ពុំមានឯកសារណាមួយស៊ីគ្នាជាមួយពាក្យគន្លឹះ <span className="font-semibold text-[#E2E8F0]">"{searchTerm}"</span> ទេ។
             </p>
           </motion.div>
+        ) : activeTab === 'videos' ? (
+          <div className="flex flex-col gap-8 pb-10">
+            {/* Structured Chapters / Subtypes Grouping section */}
+            <div className="flex flex-col gap-10">
+              {displayVideos.length === 0 ? (
+                <div className="text-center py-20 bg-[#161B22] border border-white/5 rounded-2xl">
+                  <Youtube className="mx-auto h-12 w-12 text-slate-500 mb-4 animate-pulse" />
+                  <h3 className="text-lg font-bold text-white">គ្មានវីដេអូមេរៀនទេ</h3>
+                  <p className="mt-2 text-sm text-slate-400 max-w-sm mx-auto">
+                    មិនទាន់មានវីដេអូមេរៀនណាមួយត្រូវបានបញ្ចូល ឬស៊ីគ្នាជាមួយការស្វែងរកឡើយ។
+                  </p>
+                </div>
+              ) : (
+                groupedVideos.map(({ chapter, videos }) => (
+                  <div key={chapter} className="flex flex-col gap-5">
+                    {/* Chapter title header */}
+                    <div className="flex items-center justify-between border-b border-white/5 pb-3">
+                      <h3 className="text-base md:text-lg font-extrabold text-white flex items-center gap-2">
+                        <Folder className="text-blue-500" size={20} />
+                        {chapter}
+                        <span className="text-[11px] font-bold text-slate-400 bg-white/5 px-2 py-0.5 rounded-full border border-white/5 ml-2">
+                          {videos.length} វីដេអូ
+                        </span>
+                      </h3>
+                    </div>
+
+                    {/* Lesson grid */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+                      {videos.map((vid, idx) => (
+                        <motion.div
+                          initial={{ opacity: 0, scale: 0.98, y: 15 }}
+                          animate={{ opacity: 1, scale: 1, y: 0 }}
+                          transition={{ duration: 0.35, delay: idx * 0.04 }}
+                          key={vid.id}
+                          className="group bg-[#161B22] border border-white/5 rounded-2xl overflow-hidden hover:border-red-500/40 transition-all flex flex-col relative shadow-md"
+                        >
+                          {/* Thumbnail */}
+                          <div 
+                            className="relative h-40 w-full bg-[#0A0C10] overflow-hidden cursor-pointer"
+                            onClick={() => handlePlayVideo(vid)}
+                          >
+                            <img
+                              src={vid.coverUrl ? getDriveImageUrl(vid.coverUrl) : getYouTubeThumbnail(vid.youtubeUrl)}
+                              alt={vid.title}
+                              loading="lazy"
+                              className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-in-out"
+                            />
+                            {/* Play Overlay */}
+                            <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300">
+                              <div className="w-11 h-11 rounded-full bg-red-600 flex items-center justify-center text-white shadow-lg transform group-hover:scale-110 transition-transform">
+                                <Play fill="currentColor" size={20} className="ml-0.5" />
+                              </div>
+                            </div>
+
+                            {/* Paid/Free Badge */}
+                            <div className="absolute top-3 right-3 z-30">
+                              {vid.isFree === false && (
+                                <div className="p-1.5 bg-black/60 text-amber-400 rounded-lg shadow-sm border border-white/10 backdrop-blur-md" title="Paid Level">
+                                  <Lock size={12} className="stroke-[2.5]" />
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Duration Indicator */}
+                            {vid.duration && (
+                              <div className="absolute bottom-3 right-3 z-20 bg-black/75 text-white test-[10px] px-1.5 py-0.5 rounded font-mono font-semibold tracking-wide border border-white/5">
+                                {vid.duration}
+                              </div>
+                            )}
+
+                            {/* Category Label */}
+                            <div className="absolute bottom-3 left-3 z-20 bg-black/60 px-2 py-0.5 rounded text-[10px] font-extrabold tracking-wide text-red-500 border border-red-500/10 flex items-center gap-1">
+                              <Youtube size={12} /> {vid.type || 'VIDEO'}
+                            </div>
+
+                            <div className="absolute inset-0 bg-gradient-to-t from-[#161B22] via-transparent to-transparent opacity-60 z-10 pointer-events-none" />
+                          </div>
+
+                          {/* Detail block */}
+                          <div className="p-4 flex-1 flex flex-col">
+                            {vid.description && (
+                              <p className="text-slate-400 text-xs line-clamp-2 mb-2 leading-relaxed">
+                                {vid.description}
+                              </p>
+                            )}
+
+                            <div className="flex-1"></div>
+
+                            {/* Teacher avatar and actions */}
+                            <div className="border-t border-white/5 pt-3 flex items-center justify-between mt-auto gap-2">
+                              <h3 
+                                onClick={() => handlePlayVideo(vid)}
+                                className="text-[14px] font-extrabold text-white leading-normal line-clamp-1 hover:text-[#FF3E3E] cursor-pointer transition-colors"
+                                title={vid.title}
+                              >
+                                {vid.title}
+                              </h3>
+                              <div className="flex items-center gap-1 shrink-0 text-slate-500 text-xs font-bold">
+                                <Eye size={12} /> {(vid.downloads || 0).toLocaleString('km-KH')}
+                              </div>
+                            </div>
+                          </div>
+                        </motion.div>
+                      ))}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         ) : activeTab === 'view' ? (
           <div className="flex flex-col gap-12">
             {groupedDocs.map((group) => (
               <div key={group.type}>
-                <h2 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
+                <div className="flex items-center gap-3 mb-6">
                   <Folder className="text-blue-500" size={24} />
-                  {group.type}
-                  <span className="text-sm font-normal text-slate-500 bg-[#161B22] px-2.5 py-0.5 rounded-full border border-white/5 ml-2">
-                    {group.docs.length}
+                  <h2 className="text-xl md:text-2xl font-bold text-white tracking-tight">{group.type}</h2>
+                  <span className="text-xs font-bold px-2.5 py-1 bg-[#161B22] text-slate-400 rounded-full border border-white/5 shadow-sm">
+                    {group.docs.length} ឯកសារ
                   </span>
-                </h2>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                   {group.docs.map((doc, index) => (
                     <motion.div
-                      initial={{ opacity: 0, scale: 0.95, y: 20 }}
-                      animate={{ opacity: 1, scale: 1, y: 0 }}
-                      transition={{ duration: 0.4, delay: index * 0.05, ease: [0.23, 1, 0.32, 1] }}
+                      initial={{ opacity: 0, y: 20 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true, margin: "-50px" }}
                       key={doc.id}
-                      className="group bg-[#161B22] border border-white/5 rounded-2xl overflow-hidden hover:border-blue-500/50 transition-colors flex flex-col"
+                      className="group bg-[#161B22] border border-white/5 hover:border-blue-500/30 rounded-2xl overflow-hidden flex flex-col shadow-lg hover:shadow-blue-900/10 transition-all duration-300 transform hover:-translate-y-1"
                     >
                       {/* Cover Image */}
-                      <div className="relative h-48 w-full bg-[#0A0C10] overflow-hidden">
+                      <div 
+                        className="relative h-40 w-full bg-[#0A0C10] overflow-hidden cursor-pointer"
+                        onClick={() => handleView(doc)}
+                      >
                         <img
-                          src={getDriveImageUrl(doc.coverUrl)}
+                          src={doc.coverUrl ? getDriveImageUrl(doc.coverUrl) : ''}
                           alt={doc.title}
                           loading="lazy"
                           className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-in-out"
                         />
+                        {/* Open Overlay */}
+                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300">
+                          <div className="w-11 h-11 rounded-full bg-blue-600 flex items-center justify-center text-white shadow-lg transform group-hover:scale-110 transition-transform">
+                            <Eye fill="currentColor" size={20} />
+                          </div>
+                        </div>
+
+                        {/* Paid/Free Badge */}
                         <div className="absolute top-3 right-3 z-30">
                           {doc.isFree === false && (
-                            <div className="p-1.5 bg-black/60 text-amber-400 rounded-lg shadow-sm backdrop-blur-md border border-white/10" title="បង់ប្រាក់ (Paid)">
-                              <Lock size={14} className="stroke-[2.5]" />
+                            <div className="p-1.5 bg-black/60 text-amber-400 rounded-lg shadow-sm border border-white/10 backdrop-blur-md" title="Paid Level">
+                              <Lock size={12} className="stroke-[2.5]" />
                             </div>
                           )}
                         </div>
+
+                        {/* File Size or Duration Indicator */}
+                        {(doc.fileSize || doc.duration) && (
+                          <div className="absolute bottom-3 right-3 z-20 bg-black/75 text-white test-[10px] px-1.5 py-0.5 rounded font-mono font-semibold tracking-wide border border-white/5 text-xs">
+                            {doc.duration || doc.fileSize}
+                          </div>
+                        )}
+
+                        {/* Category Label */}
+                        <div className="absolute bottom-3 left-3 z-20 bg-black/60 px-2 py-0.5 rounded text-[10px] font-extrabold tracking-wide text-blue-500 border border-blue-500/10 flex items-center gap-1">
+                           <Folder className="w-3 h-3" /> <span className="max-w-[120px] truncate">{doc.subType || doc.type || 'ឯកសារ'}</span>
+                        </div>
+
                         <div className="absolute inset-0 bg-gradient-to-t from-[#161B22] via-transparent to-transparent opacity-60 z-10 pointer-events-none" />
                       </div>
 
                       {/* Content */}
-                      <div className="p-5 flex-1 flex flex-col relative z-20">
-                        <h3 className="text-base font-bold text-white leading-[1.6] py-1 mb-3 line-clamp-2" title={doc.title}>
-                          {doc.title}
-                        </h3>
+                      <div className="p-4 flex-1 flex flex-col">
+                        {doc.description && (
+                          <p className="text-slate-400 text-xs line-clamp-2 mb-2 leading-relaxed">
+                            {doc.description}
+                          </p>
+                        )}
+
                         <div className="flex-1"></div>
                         
-                        <div className="border-t border-white/10 pt-4 flex items-center justify-between mt-auto">
-                          <div className="flex gap-4">
-                            <motion.button
-                              onClick={() => handleView(doc)}
-                              whileHover={{ scale: 1.05 }}
-                              whileTap={{ scale: 0.95 }}
-                              className="flex items-center gap-2 text-emerald-500 hover:text-emerald-400 transition-colors cursor-pointer text-[15px] font-bold"
-                            >
-                              <Eye size={18} />
-                              <span>មើល</span>
-                            </motion.button>
-
-                            <motion.button
-                              onClick={() => handleDownload(doc)}
-                              whileHover={{ scale: 1.05 }}
-                              whileTap={{ scale: 0.95 }}
-                              className="flex items-center gap-2 text-blue-500 hover:text-blue-400 transition-colors cursor-pointer text-[15px] font-bold"
-                            >
-                              {downloadingStates[doc.id] !== undefined ? (
-                                <CircularProgress progress={downloadingStates[doc.id]} size={18} />
-                              ) : (
-                                <>
-                                  <motion.div
-                                    animate={{ y: [0, -2, 0] }}
-                                    transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
-                                  >
-                                    <Download size={18} />
-                                  </motion.div>
-                                  <span>ទាញយក</span>
-                                </>
+                        {/* Instructor and Actions */}
+                        <div className="border-t border-white/5 pt-3 flex items-center justify-between mt-auto gap-2">
+                           <h3 
+                             onClick={() => handleView(doc)}
+                             className="text-[14px] font-extrabold text-white leading-normal line-clamp-1 hover:text-[#3B82F6] cursor-pointer transition-colors"
+                             title={doc.title}
+                           >
+                             {doc.title}
+                           </h3>
+                           <div className="flex items-center gap-2 shrink-0">
+                              <div className="text-slate-500 text-xs font-bold mr-1">
+                                <Eye size={12} className="inline mr-0.5"/> {(doc.downloads || 0).toLocaleString('km-KH')}
+                              </div>
+                              {doc.youtubeUrl && (
+                                <button
+                                  onClick={() => handlePlayVideo(doc)}
+                                  className="text-red-500 hover:text-red-400 font-bold text-xs p-1 flex items-center gap-1"
+                                >
+                                  <Youtube size={14} /> វីដេអូ
+                                </button>
                               )}
-                            </motion.button>
-
-                          </div>
-
-                          <div className="flex items-center gap-1.5 text-[13px] text-slate-400 font-medium tracking-wide" title="ចំនួនអ្នកទាញយក">
-                            <Eye size={14} />
-                            <span>{doc.downloads?.toLocaleString('km-KH') || 0}</span>
-                          </div>
+                              <button
+                                onClick={() => handleDownload(doc)}
+                                className="text-emerald-500 hover:text-emerald-400 font-bold text-xs p-1 flex items-center gap-1 ml-1"
+                              >
+                                {downloadingStates[doc.id] !== undefined ? (
+                                  <CircularProgress progress={downloadingStates[doc.id]} size={14} />
+                                ) : (
+                                  <><Download size={14} /> ទាញយក</>
+                                )}
+                              </button>
+                           </div>
                         </div>
                       </div>
                     </motion.div>
@@ -1419,7 +2153,7 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredDocs.map(doc => (
+                  {filteredDocs.filter(d => !d.youtubeUrl).map(doc => (
                     <tr key={doc.id} className={`border-b border-white/5 transition ${doc.isHidden ? 'bg-black/60 opacity-60 hover:bg-black/40' : 'hover:bg-white/[0.02]'}`}>
                       <td className="p-4 pl-6">
                         <div className="flex items-center gap-4">
@@ -1431,6 +2165,9 @@ export default function App() {
                               <div className="text-white font-bold text-sm leading-[1.6] py-1 line-clamp-2">{doc.title}</div>
                               {doc.isFree === false && (
                                 <span className="px-1.5 py-0.5 text-[10px] font-bold bg-amber-500/10 text-amber-500 rounded flex items-center justify-center shrink-0" title="បង់ប្រាក់"><Lock size={12} className="stroke-[2.5]" /></span>
+                              )}
+                              {doc.youtubeUrl && (
+                                <span className="px-1.5 py-0.5 text-[10px] font-bold bg-red-500/10 text-red-500 rounded flex items-center justify-center shrink-0 gap-1" title="មានវីដេអូ YouTube"><Youtube size={10} /> YouTube</span>
                               )}
                             </div>
                             {doc.tags && doc.tags.length > 0 && (
@@ -1469,6 +2206,95 @@ export default function App() {
                           <button 
                             onClick={() => openEditModal(doc)} 
                             className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-500/10 rounded-lg transition"
+                            title="កែប្រែ"
+                          >
+                            <Edit2 size={16}/>
+                          </button>
+                          <button 
+                            onClick={() => handleDelete(doc.id)} 
+                            className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition"
+                            title="លុប"
+                          >
+                            <Trash2 size={16}/>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </motion.div>
+        ) : activeTab === 'manage' && isAdminUser && manageTab === 'videos' ? (
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-[#161B22] border border-white/5 rounded-2xl overflow-hidden shadow-lg"
+          >
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[700px]">
+                <thead>
+                  <tr className="border-b border-white/5 text-slate-400 text-xs uppercase tracking-wider bg-[#0A0C10]/50">
+                    <th className="p-4 pl-6 font-medium">វីដេអូ</th>
+                    <th className="p-4 font-medium w-40">ប្រភេទ</th>
+                    <th className="p-4 font-medium w-32">ទស្សនា</th>
+                    <th className="p-4 pr-6 font-medium text-right w-32">សកម្មភាព</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {videoDocs.map(doc => (
+                    <tr key={doc.id} className={`border-b border-white/5 transition ${doc.isHidden ? 'bg-black/60 opacity-60 hover:bg-black/40' : 'hover:bg-white/[0.02]'}`}>
+                      <td className="p-4 pl-6">
+                        <div className="flex items-center gap-4">
+                          <div className="w-20 h-14 rounded-lg bg-[#0A0C10] overflow-hidden shrink-0 relative border border-white/5">
+                            <img src={doc.coverUrl ? getDriveImageUrl(doc.coverUrl) : getYouTubeThumbnail(doc.youtubeUrl)} alt="" loading="lazy" className="w-full h-full object-cover" />
+                            {doc.duration && (
+                              <div className="absolute bottom-1 right-1 bg-black/80 text-white text-[10px] font-bold px-1 rounded">{doc.duration}</div>
+                            )}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 mb-1">
+                              <div className="text-white font-bold text-sm leading-[1.6] py-1 line-clamp-2">{doc.title}</div>
+                              {doc.isFree === false && (
+                                <span className="px-1.5 py-0.5 text-[10px] font-bold bg-amber-500/10 text-amber-500 rounded flex items-center justify-center shrink-0" title="បង់ប្រាក់"><Lock size={12} className="stroke-[2.5]" /></span>
+                              )}
+                            </div>
+                            {doc.tags && doc.tags.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5">
+                                {doc.tags.map((tag, idx) => (
+                                  <span key={idx} className="text-[10px] bg-red-500/10 text-red-400 font-medium px-2 py-0.5 rounded-md">{tag}</span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        {doc.type && (
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-sm text-slate-300 font-medium">{doc.type}</span>
+                            {doc.subType && <span className="text-[10px] text-slate-500">{doc.subType}</span>}
+                          </div>
+                        )}
+                      </td>
+                      <td className="p-4 text-sm text-slate-400 font-medium">
+                        <div className="flex items-center gap-1.5" title="ចំនួនអ្នកទស្សនា/ទាញយក">
+                          <Eye size={14} />
+                          {doc.downloads?.toLocaleString('km-KH') || 0}
+                        </div>
+                      </td>
+                      <td className="p-4 pr-6 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <button 
+                            onClick={() => handleToggleHide(doc)} 
+                            className={`p-2 rounded-lg transition ${doc.isHidden ? 'text-red-500 bg-red-500/10' : 'text-slate-400 hover:text-red-500 hover:bg-red-500/10'}`}
+                            title={doc.isHidden ? "បង្ហាញវីដេអូ" : "លាក់វីដេអូ"}
+                          >
+                            {doc.isHidden ? <EyeOff size={16}/> : <Eye size={16}/>}
+                          </button>
+                          <button 
+                            onClick={() => openEditModal(doc)} 
+                            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition"
                             title="កែប្រែ"
                           >
                             <Edit2 size={16}/>
@@ -1696,7 +2522,12 @@ export default function App() {
               className="w-full max-w-xl bg-[#161B22] border-0 sm:border border-white/10 sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col h-full sm:h-auto sm:max-h-[90vh]"
             >
               <div className="px-6 py-5 border-b border-white/5 flex justify-between items-center bg-[#0A0C10]/50 shrink-0">
-                <h3 className="text-lg font-bold text-white">{editingDoc ? 'កែប្រែទិន្នន័យឯកសារ' : 'បញ្ចូលឯកសារថ្មី'}</h3>
+                <h3 className="text-lg font-bold text-white">
+                  {activeTab === 'videos' 
+                    ? (editingDoc ? 'កែប្រែវីដេអូមេរៀន' : 'បញ្ចូលវីដេអូមេរៀនថ្មី') 
+                    : (editingDoc ? 'កែប្រែទិន្នន័យឯកសារ' : 'បញ្ចូលឯកសារថ្មី')
+                  }
+                </h3>
                 <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-white p-1 rounded-md hover:bg-white/5 transition"><X size={20}/></button>
               </div>
               
@@ -1744,17 +2575,29 @@ export default function App() {
                       <label className={labelClasses}>ប្រភេទ (Type)</label>
                       <select value={formData.type || ''} onChange={e => setFormData({...formData, type: e.target.value, subType: ''})} className={inputClasses}>
                         <option value="" disabled>ជ្រើសរើសប្រភេទ...</option>
-                        {categories.map((c) => (
-                           <option key={c.id} value={c.name}>{c.name}</option>
-                        ))}
+                        {(activeTab === 'videos' || (activeTab === 'manage' && manageTab === 'videos')) ? (
+                          videoCategories.map((c) => (
+                             <option key={c.id} value={c.name}>{c.name}</option>
+                          ))
+                        ) : (
+                          categories.map((c) => (
+                             <option key={c.id} value={c.name}>{c.name}</option>
+                          ))
+                        )}
                       </select>
                     </div>
                     <div>
                       <label className={labelClasses}>ប្រភេទរង (Sub Type)</label>
                       <select value={formData.subType || ''} onChange={e => setFormData({...formData, subType: e.target.value})} className={inputClasses} disabled={!formData.type}>
                          <option value="">ជ្រើសរើសប្រភេទរង...</option>
-                         {formData.type && categories.find(c => c.name === formData.type)?.subTypes.map((sub, idx) => (
-                           <option key={idx} value={sub}>{sub}</option>
+                         {formData.type && ((activeTab === 'videos' || (activeTab === 'manage' && manageTab === 'videos')) ? (
+                           videoCategories.find(c => c.name === formData.type)?.subTypes.map((sub: string, idx: number) => (
+                             <option key={idx} value={sub}>{sub}</option>
+                           ))
+                         ) : (
+                           categories.find(c => c.name === formData.type)?.subTypes.map((sub: string, idx: number) => (
+                             <option key={idx} value={sub}>{sub}</option>
+                           ))
                          ))}
                       </select>
                     </div>
@@ -1781,9 +2624,67 @@ export default function App() {
                   </div>
 
                   <div>
-                    <label className={labelClasses}>តំណទាញយក (Download URL)</label>
-                    <input required type="text" value={formData.downloadUrl || ''} onChange={e => setFormData({...formData, downloadUrl: e.target.value})} className={inputClasses} placeholder="#" />
+                    <label className={labelClasses}>
+                      តំណទាញយក (Download URL) {!(activeTab === 'videos' || (activeTab === 'manage' && manageTab === 'videos')) && <span className="text-red-500">*</span>}
+                    </label>
+                    <input 
+                      required={!(activeTab === 'videos' || (activeTab === 'manage' && manageTab === 'videos'))} 
+                      type="text" 
+                      value={formData.downloadUrl || ''} 
+                      onChange={e => setFormData({...formData, downloadUrl: e.target.value})} 
+                      className={inputClasses} 
+                      placeholder={(activeTab === 'videos' || (activeTab === 'manage' && manageTab === 'videos')) ? "# (ឬវីដេអូតំណភ្ជាប់បើចង់)" : "#"} 
+                    />
                   </div>
+
+                  <div>
+                    <label className={labelClasses}>
+                      តំណភ្ជាប់វីដេអូ YouTube / Link ផ្សេងៗ (Video URL) {(activeTab === 'videos' || (activeTab === 'manage' && manageTab === 'videos')) && <span className="text-red-500">*</span>}
+                    </label>
+                    <input 
+                      required={(activeTab === 'videos' || (activeTab === 'manage' && manageTab === 'videos'))} 
+                      type="text" 
+                      value={formData.youtubeUrl || ''} 
+                      onChange={e => setFormData({...formData, youtubeUrl: e.target.value})} 
+                      className={inputClasses} 
+                      placeholder={(activeTab === 'videos' || (activeTab === 'manage' && manageTab === 'videos')) ? "https://www.youtube.com/watch?v=..." : "https://www.youtube.com/watch?v=... (តាមជម្រើស)"} 
+                    />
+                  </div>
+
+                  {(activeTab === 'videos' || (activeTab === 'manage' && manageTab === 'videos')) && (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div>
+                        <label className={labelClasses}>រយៈពេលវីដេអូ (Duration)</label>
+                        <input 
+                          type="text" 
+                          value={formData.duration || ''} 
+                          onChange={e => setFormData({...formData, duration: e.target.value})} 
+                          className={inputClasses} 
+                          placeholder="ឧទហរណ៍៖ ២៥ នាទី" 
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClasses}>ឈ្មោះគ្រូបង្រៀន (Instructor)</label>
+                        <input 
+                          type="text" 
+                          value={formData.instructor || ''} 
+                          onChange={e => setFormData({...formData, instructor: e.target.value})} 
+                          className={inputClasses} 
+                          placeholder="ឧទហរណ៍៖ លោកគ្រូ ហេង ពិសិដ្ឋ" 
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClasses}>លំដាប់មេរៀនទី (Lesson Order)</label>
+                        <input 
+                          type="number" 
+                          value={formData.lessonOrder || ''} 
+                          onChange={e => setFormData({...formData, lessonOrder: e.target.value ? Number(e.target.value) : undefined})} 
+                          className={inputClasses} 
+                          placeholder="ឧទាហរណ៍៖ ១" 
+                        />
+                      </div>
+                    </div>
+                  )}
                 </form>
               </div>
 
@@ -1849,6 +2750,57 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* Video Category Editor Modal */}
+      <AnimatePresence>
+        {isVideoCategoryModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-lg bg-[#161B22] border-0 sm:border border-white/10 sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col h-full sm:h-auto sm:max-h-[90vh]"
+            >
+              <div className="px-6 py-5 border-b border-white/5 flex justify-between items-center bg-[#0A0C10]/50 shrink-0">
+                <h3 className="text-lg font-bold text-white">{editingVideoCategory ? 'កែប្រែប្រភេទវីដេអូ' : (videoCategoryModalMode === 'subtype' ? 'បញ្ចូលប្រភេទរងវីដេអូថ្មី' : 'បញ្ចូលប្រភេទវីដេអូថ្មី')}</h3>
+                <button onClick={() => setIsVideoCategoryModalOpen(false)} className="text-slate-400 hover:text-white p-1 rounded-md hover:bg-white/5 transition"><X size={20}/></button>
+              </div>
+              
+              <div className="p-6 overflow-y-auto flex-1">
+                <form id="video-category-form" onSubmit={handleVideoCategorySubmit} className="flex flex-col gap-5">
+                  {!editingVideoCategory && videoCategoryModalMode === 'subtype' ? (
+                    <div>
+                      <label className={labelClasses}>ជ្រើសរើសប្រភេទវីដេអូ (Video Category)</label>
+                      <select required value={videoCategoryFormData.name || ''} onChange={e => setVideoCategoryFormData({...videoCategoryFormData, name: e.target.value})} className={inputClasses}>
+                        <option value="" disabled>ជ្រើសរើសប្រភេទវីដេអូ...</option>
+                        {videoCategories.map((c) => (
+                           <option key={c.id} value={c.name}>{c.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className={labelClasses}>ឈ្មោះប្រភេទវីដេអូ</label>
+                      <input required type="text" value={videoCategoryFormData.name || ''} onChange={e => setVideoCategoryFormData({...videoCategoryFormData, name: e.target.value})} className={inputClasses} placeholder="ឧ. កុំព្យូទ័រ" />
+                    </div>
+                  )}
+                  <div>
+                    <label className={labelClasses}>ប្រភេទរង (ប្រើសញ្ញាក្បៀស ',' ដើម្បីបំបែក)</label>
+                    <textarea rows={3} required={videoCategoryModalMode === 'subtype'} value={videoCategoryFormData.subTypes || ''} onChange={e => setVideoCategoryFormData({...videoCategoryFormData, subTypes: e.target.value})} className={`${inputClasses} resize-none`} placeholder="ឧ. Word, Excel, PowerPoint" />
+                  </div>
+                </form>
+              </div>
+
+              <div className="px-6 py-5 border-t border-white/5 bg-[#0A0C10]/50 flex justify-end gap-3 shrink-0">
+                <button type="button" onClick={() => setIsVideoCategoryModalOpen(false)} className="px-5 py-2.5 rounded-lg text-sm font-bold text-slate-300 hover:bg-white/5 transition">បោះបង់</button>
+                <button type="submit" form="video-category-form" className="px-5 py-2.5 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 transition">
+                  {editingVideoCategory ? 'រក្សាទុកការប្រែប្រួល' : (videoCategoryModalMode === 'subtype' ? 'បញ្ចូលប្រភេទរង' : 'បញ្ចូលប្រភេទ')}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Delete Confirmation Modal */}
       <AnimatePresence>
         {deleteConfirm.isOpen && (
@@ -1870,6 +2822,7 @@ export default function App() {
                 <p className="text-slate-300">
                   {deleteConfirm.type === 'doc' ? 'តើអ្នកពិតជាចង់លុបឯកសារនេះមែនទេ?' : 
                    deleteConfirm.type === 'category' ? 'តើអ្នកពិតជាចង់លុបប្រភេទនេះមែនទេ?' :
+                   deleteConfirm.type === 'video_category' ? 'តើអ្នកពិតជាចង់លុបប្រភេទវីដេអូនេះមែនទេ?' :
                    `តើអ្នកពិតជាចង់លុបប្រភេទរង "${deleteConfirm.extra}" មែនទេ?`}
                 </p>
                 <p className="text-slate-500 text-sm mt-2">សកម្មភាពនេះមិនអាចត្រឡប់វិញបានទេ។</p>
@@ -2083,6 +3036,254 @@ export default function App() {
             </motion.div>
           </motion.div>
         )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {activeYoutubeDoc && (() => {
+          const playlistVideos = allVideoDocs
+            .filter(v => v.type === activeYoutubeDoc.type && v.subType === activeYoutubeDoc.subType && (!v.isHidden || isAdminState))
+            .sort((a, b) => {
+              const orderA = a.lessonOrder !== undefined ? a.lessonOrder : 999;
+              const orderB = b.lessonOrder !== undefined ? b.lessonOrder : 999;
+              if (orderA !== orderB) return orderA - orderB;
+              return a.title.localeCompare(b.title, 'km');
+            });
+            
+          const playlistGroups: { chapter: string, videos: typeof playlistVideos }[] = [];
+          const groupsMap: { [key: string]: typeof playlistVideos } = {};
+          playlistVideos.forEach(v => {
+            const chap = v.subType || 'ផ្សេងៗ';
+            if (!groupsMap[chap]) groupsMap[chap] = [];
+            groupsMap[chap].push(v);
+          });
+          Object.keys(groupsMap).sort((a,b) => {
+            if (a === 'ផ្សេងៗ') return 1;
+            if (b === 'ផ្សេងៗ') return -1;
+            return a.localeCompare(b, 'km');
+          }).forEach(k => {
+            playlistGroups.push({ chapter: k, videos: groupsMap[k] });
+          });
+
+          return (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[200] flex items-center justify-center bg-black/95 p-0 sm:p-4 md:p-6 lg:p-8"
+            >
+              <motion.div
+                initial={{ scale: 0.95 }}
+                animate={{ scale: 1 }}
+                exit={{ scale: 0.95 }}
+                className="bg-[#0E1117] w-full max-w-6xl h-full sm:h-[85vh] lg:h-[750px] sm:rounded-2xl border-0 sm:border border-white/10 flex flex-col lg:flex-row overflow-hidden shadow-2xl"
+              >
+                {/* LEFT CONSOLE SCREEN (Video Player + Metadatas) */}
+                <div className="flex-1 flex flex-col h-full overflow-hidden bg-black">
+                  {/* Top Bar inside Video Panel */}
+                  <div className="flex items-center justify-between p-4 bg-[#0A0C10] border-b border-white/5">
+                    <span className="text-slate-400 text-xs font-semibold uppercase truncate shrink text-blue-400">
+                      {activeYoutubeDoc.type} • {activeYoutubeDoc.subType || 'វីដេអូ'}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setShowPlaylist(!showPlaylist)}
+                        className="flex items-center gap-1.5 text-slate-400 hover:text-white px-2 py-1.5 rounded-md hover:bg-white/5 transition-colors text-[11px] sm:text-xs font-bold"
+                      >
+                        <Menu size={16} /> 
+                        <span className="hidden sm:inline">{showPlaylist ? 'បិទបញ្ជីមេរៀន' : 'បើកបញ្ជីមេរៀន'}</span>
+                      </button>
+                      <button 
+                        onClick={() => setActiveYoutubeDoc(null)} 
+                        className="text-slate-400 hover:text-white p-1 rounded-md hover:bg-white/5 transition-colors lg:hidden"
+                      >
+                        <X size={20} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Player Container */}
+                  <div className="relative w-full aspect-video bg-black flex-shrink-0">
+                    {getYouTubeEmbedUrl(activeYoutubeDoc.youtubeUrl || '') ? (
+                      <iframe
+                        src={getYouTubeEmbedUrl(activeYoutubeDoc.youtubeUrl || '')}
+                        className="absolute inset-0 w-full h-full border-0"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        allowFullScreen
+                        title={activeYoutubeDoc.title}
+                      />
+                    ) : (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 p-6 text-center">
+                        <X size={48} className="text-red-500 mb-3" />
+                        <p className="font-semibold text-white mb-1">មិនអាចចាក់វីដេអូបានទេ</p>
+                        <p className="text-sm text-slate-500">តំណភ្ជាប់ YouTube មិនត្រឹមត្រូវ ឬមិនមែនជាទម្រង់ដែលអាចចាក់បាន។</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Scrollable Information Underneath */}
+                  <div className="flex-1 p-5 md:p-6 overflow-y-auto bg-[#0E1117] border-t border-white/5">
+                    <div className="flex flex-col gap-4">
+                      {/* Course / Lesson Header */}
+                      <div className="flex flex-col gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="bg-red-600/10 text-red-500 text-[10px] font-bold tracking-wider px-2 py-0.5 rounded-full border border-red-500/10 flex items-center gap-1">
+                            <Youtube size={12} fill="currentColor" /> {activeYoutubeDoc.type || 'វីដេអូមេរៀន'}
+                          </span>
+                          {activeYoutubeDoc.subType && (
+                            <span className="bg-blue-600/10 text-blue-400 text-[10px] font-bold px-2.5 py-0.5 rounded-full border border-blue-500/10 flex items-center gap-1">
+                              <Folder size={12} fill="currentColor" className="text-blue-500" /> {activeYoutubeDoc.subType}
+                            </span>
+                          )}
+                          {activeYoutubeDoc.isFree === false ? (
+                            <span className="bg-amber-500/10 text-amber-500 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-500/10 flex items-center gap-1">
+                              <Lock size={10} /> Pro Member
+                            </span>
+                          ) : (
+                            <span className="bg-slate-500/10 text-emerald-500 text-[10px] font-bold px-2 py-0.5 rounded-full border-slate-500/20">
+                              ឥតគិតថ្លៃ (Free)
+                            </span>
+                          )}
+                        </div>
+                        <h2 className="text-lg md:text-xl font-bold text-white leading-relaxed">
+                          {activeYoutubeDoc.title}
+                        </h2>
+                      </div>
+
+                      {/* Duration block */}
+                      <div className="flex flex-wrap items-center gap-4 py-3 border-y border-white/5 text-xs text-slate-400">
+                        {activeYoutubeDoc.duration && (
+                          <div className="flex items-center gap-2">
+                            <div className="text-slate-500">រយៈពេលសិក្សា៖</div>
+                            <div className="font-semibold text-slate-200">{activeYoutubeDoc.duration}</div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Description */}
+                      {activeYoutubeDoc.description && (
+                        <div className="bg-white/[0.02] p-4 rounded-xl border border-white/5">
+                          <h4 className="text-xs font-bold text-slate-300 mb-2 uppercase tracking-wide">សេចក្តីពិពណ៌នា</h4>
+                          <p className="text-slate-400 text-sm leading-relaxed whitespace-pre-wrap">
+                            {activeYoutubeDoc.description}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Video materials & original references */}
+                      <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                        <a 
+                          href={activeYoutubeDoc.youtubeUrl} 
+                          target="_blank" 
+                          rel="noopener noreferrer" 
+                          className="flex-1 flex items-center justify-center gap-2 bg-[#1A1F26] hover:bg-[#252C36] text-white text-sm font-semibold py-3 px-4 rounded-xl border border-white/10 transition-colors"
+                        >
+                          <Youtube size={18} fill="currentColor" className="text-red-500" />
+                          <span>ទស្សនាលើ YouTube ផ្ទាល់</span>
+                        </a>
+
+                        {activeYoutubeDoc.downloadUrl && activeYoutubeDoc.downloadUrl !== '#' && (
+                          <a 
+                            href={activeYoutubeDoc.downloadUrl} 
+                            target="_blank" 
+                            rel="noopener noreferrer" 
+                            className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-3 px-4 rounded-xl transition-colors shadow-lg shadow-blue-600/10"
+                          >
+                            <Download size={18} />
+                            <span>ទាញយកឯកសារមេរៀន (PDF/ស្លាយ)</span>
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* RIGHT LESSONS PLAYLIST SIDEBAR */}
+                {showPlaylist && (
+                  <div className="w-full lg:w-[360px] border-t lg:border-t-0 lg:border-l border-white/10 bg-[#161B22] flex flex-col h-[50vh] lg:h-full overflow-hidden shrink-0 transition-all duration-300">
+                    {/* Playlist Header */}
+                    <div className="p-4 bg-[#0A0C10]/40 border-b border-white/5 flex items-center justify-between">
+                      <div>
+                        <h3 className="font-bold text-white text-sm flex items-center gap-1.5">
+                          <Book size={16} className="text-blue-400" />
+                          បញ្ជីភាគមេរៀន
+                        </h3>
+                        <p className="text-[10px] text-slate-500 mt-0.5">{activeYoutubeDoc.type} • មានសរុប {playlistVideos.length} មេរៀន</p>
+                      </div>
+                      {/* Desktop Close Player Button */}
+                      <button 
+                        onClick={() => setActiveYoutubeDoc(null)} 
+                        className="hidden lg:flex text-slate-400 hover:text-red-500 p-1.5 rounded-lg hover:bg-white/10 transition-colors tooltip title='បិទផ្ទាំងនេះ'"
+                        title="បិទផ្ទាំងនេះ"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    {/* Playlist Items */}
+                    <div className="flex-1 overflow-y-auto mix-blend-screen bg-[#161B22]">
+                      {playlistGroups.map((group) => (
+                        <div key={group.chapter} className="border-b border-white/5 last:border-0 pb-4">
+                          <h4 className="sticky top-0 bg-[#0A0C10]/95 backdrop-blur-sm z-10 text-xs font-extrabold text-blue-400 py-2.5 px-4 flex items-center gap-2 border-b border-white/5">
+                            <Folder size={14} /> {group.chapter}
+                          </h4>
+                          <div className="divide-y divide-white/[0.03]">
+                            {group.videos.map((item) => {
+                              const isActive = item.id === activeYoutubeDoc.id;
+                              return (
+                                <div 
+                                  key={item.id}
+                                  onClick={() => handlePlayVideo(item)}
+                                  className={`flex gap-3 p-3 text-left transition-colors cursor-pointer select-none items-start relative border-l-4 ${isActive ? 'bg-red-600/[0.06] border-red-500' : 'hover:bg-white/[0.02] border-transparent'}`}
+                                >
+                                  {/* Mini Thumbnail */}
+                                  <div className="relative w-16 h-10 rounded overflow-hidden aspect-video bg-black/60 shrink-0 border border-white/5">
+                                    <img 
+                                      src={item.coverUrl ? getDriveImageUrl(item.coverUrl) : getYouTubeThumbnail(item.youtubeUrl)} 
+                                      className="w-full h-full object-cover"
+                                      alt=""
+                                    />
+                                    {isActive ? (
+                                      <div className="absolute inset-0 bg-red-600/30 flex items-center justify-center">
+                                        <span className="flex gap-0.5 items-end h-3">
+                                          <span className="w-0.5 bg-white rounded-full animate-bounce h-full"></span>
+                                          <span className="w-0.5 bg-white rounded-full animate-bounce h-2/3" style={{animationDelay: '0.2s'}}></span>
+                                          <span className="w-0.5 bg-white rounded-full animate-bounce h-full" style={{animationDelay: '0.4s'}}></span>
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <div className="absolute inset-0 bg-black/20 flex items-center justify-center">
+                                        <Play size={10} fill="currentColor" className="text-white ml-0.5" />
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Text Descriptions */}
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex gap-1.5 items-center mb-0.5">
+                                      {item.isFree === false && (
+                                        <Lock size={10} className="text-amber-500" />
+                                      )}
+                                    </div>
+                                    <h4 className={`text-xs font-semibold leading-relaxed truncate-2 ${isActive ? 'text-red-400' : 'text-slate-200'}`}>
+                                      {item.title}
+                                    </h4>
+                                    <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-500">
+                                      {item.duration && <span>⏱️ {item.duration}</span>}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            </motion.div>
+          );
+        })()}
       </AnimatePresence>
     </div>
   );

@@ -37,6 +37,26 @@
       },
       "required": ["id", "name"]
     },
+    "VideoCategory": {
+      "title": "Video Category",
+      "description": "Video lessons primary and sub-category metadata for sorting and filtering",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the category"
+        },
+        "name": {
+          "type": "string",
+          "description": "Full display name of the primary category"
+        },
+        "subTypes": {
+          "type": "array",
+          "description": "List of sub-category strings belonging to this category"
+        }
+      },
+      "required": ["id", "name"]
+    },
     "Document": {
       "title": "Document",
       "description": "Downloadable file metadata and asset source directories",
@@ -106,6 +126,10 @@
     "/categories/{categoryId}": {
       "schema": "Category",
       "description": "Document categories configuration dynamic catalog"
+    },
+    "/video_categories/{videoCategoryId}": {
+      "schema": "VideoCategory",
+      "description": "Video categories configuration dynamic catalog"
     },
     "/docs/{docId}": {
       "schema": "Document",

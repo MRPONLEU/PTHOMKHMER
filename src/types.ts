@@ -18,4 +18,8 @@ export interface DocumentItem {
   isHidden?: boolean;
   isFree?: boolean;
   tags?: string[];
+  youtubeUrl?: string;
+  duration?: string;
+  instructor?: string;
+  lessonOrder?: number;
 }

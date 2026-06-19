@@ -86,6 +86,20 @@ service cloud.firestore {
       }
     }
 
+    // --- Video Categories Collection ---
+    match /video_categories/{videoCategoryId} {
+      allow read: if true; // Public catalogs are publicly readable
+      allow create, update: if isAdmin() && isValidVideoCategory(request.resource.data);
+      allow delete: if isAdmin();
+
+      function isValidVideoCategory(data) {
+        return data.keys().hasAll(['id', 'name', 'subTypes'])
+          && data.id is string && data.id.size() <= 128
+          && data.name is string && data.name.size() <= 200
+          && data.subTypes is list && data.subTypes.size() <= 50;
+      }
+    }
+
     // --- Documents Collection ---
     match /docs/{docId} {
       allow read: if true;
@@ -105,18 +119,24 @@ service cloud.firestore {
 
       function isValidDoc(data) {
         return data.keys().hasAll(['id', 'title', 'downloadUrl', 'uploadDate', 'downloads'])
-          && data.id is string && data.id.size() <= 128
-          && data.title is string && data.title.size() <= 300
-          && (data.description == null || (data.description is string && data.description.size() <= 2000))
-          && (data.coverUrl == null || (data.coverUrl is string && data.coverUrl.size() <= 1500000))
-          && data.downloadUrl is string && data.downloadUrl.size() <= 2500
-          && data.uploadDate is string && data.uploadDate.size() <= 50
+          && data.id is string
+          && data.title is string
+          && (!("description" in data) || data.description == null || data.description is string)
+          && (!("coverUrl" in data) || data.coverUrl == null || data.coverUrl is string)
+          && data.downloadUrl is string
+          && data.uploadDate is string
           && (data.downloads is int || data.downloads is float)
-          && (data.type == null || (data.type is string && data.type.size() <= 128))
-          && (data.subType == null || (data.subType is string && data.subType.size() <= 128))
-          && (data.isHidden == null || data.isHidden is bool)
-          && (data.isFree == null || data.isFree is bool)
-          && (data.tags == null || data.tags is list);
+          && (!("type" in data) || data.type == null || data.type is string)
+          && (!("subType" in data) || data.subType == null || data.subType is string)
+          && (!("isHidden" in data) || data.isHidden == null || data.isHidden is bool)
+          && (!("isFree" in data) || data.isFree == null || data.isFree is bool)
+          && (!("tags" in data) || data.tags == null || data.tags is list)
+          && (!("youtubeUrl" in data) || data.youtubeUrl == null || data.youtubeUrl is string)
+          && (!("duration" in data) || data.duration == null || data.duration is string)
+          && (!("instructor" in data) || data.instructor == null || data.instructor is string)
+          && (!("lessonOrder" in data) || data.lessonOrder == null || data.lessonOrder is int || data.lessonOrder is float)
+          && (!("fileSize" in data) || data.fileSize == null || data.fileSize is string)
+          && (!("fileType" in data) || data.fileType == null || data.fileType is string);
       }
     }
   }
