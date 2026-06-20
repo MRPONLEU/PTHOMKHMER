@@ -61,12 +61,15 @@ service cloud.firestore {
     // --- Users Collection ---
     match /users/{userEmail} {
       allow read: if true;
-      // Users can create/update their own basic record on login, but can't elevate their role
-      allow create, update: if 
+      // Allow creation of user records by anyone (to support registration / simulated fallback)
+      allow create: if 
+        (resource == null && (!("role" in request.resource.data) || request.resource.data.role == 'user'))
+        || isAdmin();
+      // Allow updates to own record by signed in user, but prevent role elevation
+      allow update: if 
         (isSignedIn() && getEmail() == userEmail && (
-          // If the role is not being elevated or changed
-          (resource == null && !("role" in request.resource.data)) || 
-          (resource != null && request.resource.data.get('role', 'user') == resource.data.get('role', 'user'))
+          (!("role" in request.resource.data) || request.resource.data.role == 'user') ||
+          (resource != null && "role" in resource.data && request.resource.data.role == resource.data.role)
         )) 
         || isAdmin();
       allow delete: if isAdmin();

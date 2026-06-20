@@ -13,6 +13,7 @@ export interface DocumentItem {
   downloadUrl: string;
   uploadDate: string;
   downloads: number;
+  views?: number;
   type?: string;
   subType?: string;
   isHidden?: boolean;
